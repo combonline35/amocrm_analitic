@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Заявка</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #f4f7fb;
+      color: #121820;
+      font: 16px/1.45 Arial, sans-serif;
+    }
+
+    form {
+      width: min(420px, calc(100% - 32px));
+      display: grid;
+      gap: 12px;
+      padding: 24px;
+      background: #fff;
+      border: 1px solid #d8e0ea;
+      border-radius: 8px;
+    }
+
+    input,
+    textarea,
+    button {
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 6px;
+      font: inherit;
+    }
+
+    input,
+    textarea {
+      border: 1px solid #c7d2df;
+      padding: 11px 12px;
+    }
+
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+
+    button {
+      border: 0;
+      padding: 12px 14px;
+      background: #1769e0;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: .65;
+      cursor: wait;
+    }
+
+    .status {
+      min-height: 22px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <form id="lead-form">
+    <input name="name" autocomplete="name" placeholder="Ваше имя">
+    <input name="phone" autocomplete="tel" placeholder="Телефон" required>
+    <input name="email" autocomplete="email" placeholder="Email">
+    <textarea name="message" placeholder="Комментарий"></textarea>
+    <input type="hidden" name="source" value="site">
+    <input type="hidden" name="page_url" id="page-url">
+    <button type="submit">Отправить</button>
+    <div class="status" id="form-status" aria-live="polite"></div>
+  </form>
+
+  <script>
+    const endpoint = 'http://127.0.0.1:8010/api/site/form';
+    const form = document.querySelector('#lead-form');
+    const statusNode = document.querySelector('#form-status');
+    const pageUrl = document.querySelector('#page-url');
+
+    pageUrl.value = window.location.href;
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = form.querySelector('button');
+      button.disabled = true;
+      statusNode.textContent = 'Отправляем...';
+
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          body: new FormData(form),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) {
+          throw new Error(result.error || result.detail || 'Не удалось отправить заявку');
+        }
+        form.reset();
+        pageUrl.value = window.location.href;
+        statusNode.textContent = 'Заявка отправлена';
+      } catch (error) {
+        statusNode.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

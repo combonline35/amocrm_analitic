@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Secrets / env
+.env
+.env.*
+*.env
+account.env
+oauth_callback.json
+*token*.json
+
+# Databases / runtime data
+data/
+*.sqlite3
+*.sqlite
+*.db
+
+# Widget result cache (client calcs)
+dashboard_widget_results.json
+
+# Build / transfer artifacts
+*.zip
+*.log
+tools/cloudflared.exe
+tools/*.exe
+.pytest_cache/
+outputs/

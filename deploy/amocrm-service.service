@@ -1,0 +1,16 @@
+[Unit]
+Description=amoCRM site form integration service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/amocrm_service
+EnvironmentFile=/etc/amocrm-service.env
+Environment=PYTHONPATH=/opt/amocrm_service/src
+ExecStart=/usr/bin/python3 -m amocrm_service.server --host 127.0.0.1 --port 8010
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
