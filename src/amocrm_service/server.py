@@ -4924,6 +4924,7 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         settings = _settings_from_query(parsed.query)
+        # ═══════════════ СТРАНИЦЫ / ОБЩЕЕ ═══════════════
         if parsed.path == "/admin":
             self._send_html(_render_admin_page())
             return
@@ -4932,36 +4933,6 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/account-settings":
             self._send_html(_render_account_settings_page(settings, parsed.query))
-            return
-        if parsed.path == "/conversations":
-            self._send_html(_render_conversations_page(settings, parsed.query))
-            return
-        if parsed.path in {"/queue", "/queue.html"}:
-            self._send_html(_render_queue_page(settings, parsed.query))
-            return
-        if parsed.path in {"/freshness", "/freshness.html"}:
-            self._send_html(_render_freshness_page(settings))
-            return
-        if parsed.path in {"/quality", "/quality.html"}:
-            self._send_html(_render_quality_page(settings, parsed.query))
-            return
-        if parsed.path in {"/quality-settings", "/quality-settings.html"}:
-            self._send_html(_render_quality_settings_page(settings))
-            return
-        if parsed.path in {"/activity", "/activity.html"}:
-            self._send_html(_render_activity_page(settings, parsed.query))
-            return
-        if parsed.path in {"/", "/dashboard", "/dashboard.html"}:
-            self._send_html(_dashboard_html(page="dashboard", settings=settings, query_string=parsed.query))
-            return
-        if parsed.path in {"/drilldown", "/drilldown.html"}:
-            self._send_html(_drilldown_html(settings, parsed.query))
-            return
-        if parsed.path in {"/constructor", "/constructor.html"}:
-            self._send_html(_dashboard_html(page="constructor", settings=settings, query_string=parsed.query))
-            return
-        if parsed.path in {"/settings", "/settings.html"}:
-            self._send_html(_dashboard_html(page="settings", settings=settings, query_string=parsed.query))
             return
         if parsed.path == "/oauth/callback":
             saved = _save_oauth_callback(parse_qs(parsed.query), settings)
@@ -5015,6 +4986,25 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
             </html>
             """)
             return
+        # ═══════════════ BI / АНАЛИТИКА ═══════════════
+        if parsed.path in {"/", "/dashboard", "/dashboard.html"}:
+            self._send_html(_dashboard_html(page="dashboard", settings=settings, query_string=parsed.query))
+            return
+        if parsed.path in {"/drilldown", "/drilldown.html"}:
+            self._send_html(_drilldown_html(settings, parsed.query))
+            return
+        if parsed.path in {"/constructor", "/constructor.html"}:
+            self._send_html(_dashboard_html(page="constructor", settings=settings, query_string=parsed.query))
+            return
+        if parsed.path in {"/settings", "/settings.html"}:
+            self._send_html(_dashboard_html(page="settings", settings=settings, query_string=parsed.query))
+            return
+        if parsed.path in {"/activity", "/activity.html"}:
+            self._send_html(_render_activity_page(settings, parsed.query))
+            return
+        if parsed.path in {"/freshness", "/freshness.html"}:
+            self._send_html(_render_freshness_page(settings))
+            return
         if parsed.path == "/api/summary":
             repo = _repo(settings)
             analytics = AnalyticsService(repo)
@@ -5022,47 +5012,6 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
             self._send_json({
                 "pipeline_summary": analytics.pipeline_summary(analytics_filter),
                 "tasks": analytics.tasks_summary(),
-            })
-            return
-        if parsed.path == "/api/sync-options":
-            self._send_json([
-                {"entity": entity, "label": label, "checked": checked}
-                for entity, label, checked in SYNC_OPTIONS
-            ])
-            return
-        if parsed.path == "/api/hub/overview":
-            self._send_json({
-                "ok": True,
-                "user_key": settings.user_key,
-                "account_key": settings.account_key,
-                "db_path": str(settings.db_path),
-                "hub": _repo(settings).hub_overview(),
-            })
-            return
-        if parsed.path == "/api/hub/background":
-            self._send_json({
-                "ok": True,
-                "user_key": settings.user_key,
-                "account_key": settings.account_key,
-                "background": _background_worker_snapshot(settings.user_key, settings.account_key),
-            })
-            return
-        if parsed.path == "/api/connection/status":
-            repo = _repo(settings)
-            entities = repo.hub_entity_overview()
-            self._send_json({
-                "ok": True,
-                "user_key": settings.user_key,
-                "account_key": settings.account_key,
-                "db_path": str(settings.db_path),
-                "entities_count": sum(int(row["items_count"] or 0) for row in entities),
-                "entity_types": len(entities),
-                "entities": entities,
-                "queue": repo.queue_status_counts(settings.account_key),
-                "latest_jobs": repo.latest_sync_jobs(settings.account_key, 5),
-                "latest_runs": repo.latest_sync_runs(5),
-                "latest_errors": repo.latest_errors(5),
-                "background": _background_worker_snapshot(settings.user_key, settings.account_key),
             })
             return
         if parsed.path == "/api/activity/summary":
@@ -5098,30 +5047,6 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
                 "freshness": FreshnessService(_repo(settings)).dashboard(settings.account_key),
             })
             return
-        if parsed.path == "/api/quality/summary":
-            query = parse_qs(parsed.query)
-            try:
-                stale_days = int((query.get("stale_days") or ["3"])[0])
-            except ValueError:
-                stale_days = 3
-            raw_settings = load_account_settings(
-                user_key=settings.user_key,
-                account_key=settings.account_key,
-                data_root=settings.data_root,
-            )
-            current_quality_settings = quality_settings(raw_settings)
-            current_quality_settings["stale_lead_days"] = stale_days
-            self._send_json({
-                "ok": True,
-                "user_key": settings.user_key,
-                "account_key": settings.account_key,
-                "quality": QualityService(_repo(settings)).summary(
-                    stale_lead_days=stale_days,
-                    max_risks=int(current_quality_settings["max_risks"]),
-                    settings=current_quality_settings,
-                ),
-            })
-            return
         if parsed.path == "/api/kpi/daily":
             query = parse_qs(parsed.query)
             target_date = (query.get("date") or [""])[0] or None
@@ -5140,61 +5065,6 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
                 "account_key": settings.account_key,
                 "marts": _repo(settings).lead_kpi_daily_status(),
             })
-            return
-        if parsed.path == "/api/sync-queue":
-            self._send_json({"ok": True, "queue": _repo(settings).queue_summary(settings.account_key)})
-            return
-        if parsed.path == "/api/sync-queue/items":
-            query = parse_qs(parsed.query)
-            status = (query.get("status") or ["failed"])[0] or None
-            limit = int((query.get("limit") or ["100"])[0])
-            self._send_json({
-                "ok": True,
-                "items": _repo(settings).list_sync_queue_items(settings.account_key, status=status, limit=limit),
-            })
-            return
-        if parsed.path == "/api/sync-sources":
-            self._send_json({
-                "ok": True,
-                "sources": _repo(settings).list_sync_sources(settings.account_key),
-            })
-            return
-        if parsed.path == "/api/call-checklist-steps":
-            try:
-                query = parse_qs(parsed.query)
-                active = self._active_filter(query)
-                self._send_json({
-                    "ok": True,
-                    "account_key": settings.account_key,
-                    "steps": _repo(settings).list_call_checklist_steps(settings.account_key, active=active),
-                })
-            except Exception as exc:
-                self._send_json({"ok": False, "error": str(exc)}, status=400)
-            return
-        if parsed.path == "/api/conversations":
-            repo = _repo(settings)
-            self._send_json({
-                "ok": True,
-                "records": repo.list_conversation_records(settings.account_key, limit=100),
-                "analyses": repo.list_conversation_analyses(settings.account_key, limit=100),
-            })
-            return
-        if parsed.path.startswith("/api/sync/jobs/"):
-            try:
-                job_id = int(parsed.path.removeprefix("/api/sync/jobs/").strip("/"))
-                job = _repo(settings).get_sync_job(job_id, settings.account_key)
-                if not job:
-                    self._send_json({"ok": False, "error": "sync job not found"}, status=404)
-                    return
-                with _SYNC_THREADS_LOCK:
-                    active_in_process = job_id in _SYNC_THREADS
-                    job["active_in_process"] = active_in_process
-                if job["status"] in {"pending", "running"} and not active_in_process:
-                    job["status"] = "interrupted"
-                    job["error"] = job.get("error") or "Сервис перезапускался, фоновая задача остановлена. Запустите выгрузку еще раз."
-                self._send_json({"ok": True, "job": job})
-            except ValueError:
-                self._send_json({"ok": False, "error": "invalid sync job id"}, status=400)
             return
         if parsed.path == "/api/analytics-filter":
             self._send_json(load_analytics_filter(settings.db_path).to_json())
@@ -5243,11 +5113,146 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, status=400)
             return
+        # ═══════════════ РЕЧЕВАЯ / КАЧЕСТВО ═══════════════
+        if parsed.path == "/conversations":
+            self._send_html(_render_conversations_page(settings, parsed.query))
+            return
+        if parsed.path in {"/quality", "/quality.html"}:
+            self._send_html(_render_quality_page(settings, parsed.query))
+            return
+        if parsed.path in {"/quality-settings", "/quality-settings.html"}:
+            self._send_html(_render_quality_settings_page(settings))
+            return
+        if parsed.path == "/api/quality/summary":
+            query = parse_qs(parsed.query)
+            try:
+                stale_days = int((query.get("stale_days") or ["3"])[0])
+            except ValueError:
+                stale_days = 3
+            raw_settings = load_account_settings(
+                user_key=settings.user_key,
+                account_key=settings.account_key,
+                data_root=settings.data_root,
+            )
+            current_quality_settings = quality_settings(raw_settings)
+            current_quality_settings["stale_lead_days"] = stale_days
+            self._send_json({
+                "ok": True,
+                "user_key": settings.user_key,
+                "account_key": settings.account_key,
+                "quality": QualityService(_repo(settings)).summary(
+                    stale_lead_days=stale_days,
+                    max_risks=int(current_quality_settings["max_risks"]),
+                    settings=current_quality_settings,
+                ),
+            })
+            return
+        if parsed.path == "/api/call-checklist-steps":
+            try:
+                query = parse_qs(parsed.query)
+                active = self._active_filter(query)
+                self._send_json({
+                    "ok": True,
+                    "account_key": settings.account_key,
+                    "steps": _repo(settings).list_call_checklist_steps(settings.account_key, active=active),
+                })
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        if parsed.path == "/api/conversations":
+            repo = _repo(settings)
+            self._send_json({
+                "ok": True,
+                "records": repo.list_conversation_records(settings.account_key, limit=100),
+                "analyses": repo.list_conversation_analyses(settings.account_key, limit=100),
+            })
+            return
+        # ═══════════════ СИНХРА / ХАБ ═══════════════
+        if parsed.path in {"/queue", "/queue.html"}:
+            self._send_html(_render_queue_page(settings, parsed.query))
+            return
+        if parsed.path == "/api/sync-options":
+            self._send_json([
+                {"entity": entity, "label": label, "checked": checked}
+                for entity, label, checked in SYNC_OPTIONS
+            ])
+            return
+        if parsed.path == "/api/hub/overview":
+            self._send_json({
+                "ok": True,
+                "user_key": settings.user_key,
+                "account_key": settings.account_key,
+                "db_path": str(settings.db_path),
+                "hub": _repo(settings).hub_overview(),
+            })
+            return
+        if parsed.path == "/api/hub/background":
+            self._send_json({
+                "ok": True,
+                "user_key": settings.user_key,
+                "account_key": settings.account_key,
+                "background": _background_worker_snapshot(settings.user_key, settings.account_key),
+            })
+            return
+        if parsed.path == "/api/connection/status":
+            repo = _repo(settings)
+            entities = repo.hub_entity_overview()
+            self._send_json({
+                "ok": True,
+                "user_key": settings.user_key,
+                "account_key": settings.account_key,
+                "db_path": str(settings.db_path),
+                "entities_count": sum(int(row["items_count"] or 0) for row in entities),
+                "entity_types": len(entities),
+                "entities": entities,
+                "queue": repo.queue_status_counts(settings.account_key),
+                "latest_jobs": repo.latest_sync_jobs(settings.account_key, 5),
+                "latest_runs": repo.latest_sync_runs(5),
+                "latest_errors": repo.latest_errors(5),
+                "background": _background_worker_snapshot(settings.user_key, settings.account_key),
+            })
+            return
+        if parsed.path == "/api/sync-queue":
+            self._send_json({"ok": True, "queue": _repo(settings).queue_summary(settings.account_key)})
+            return
+        if parsed.path == "/api/sync-queue/items":
+            query = parse_qs(parsed.query)
+            status = (query.get("status") or ["failed"])[0] or None
+            limit = int((query.get("limit") or ["100"])[0])
+            self._send_json({
+                "ok": True,
+                "items": _repo(settings).list_sync_queue_items(settings.account_key, status=status, limit=limit),
+            })
+            return
+        if parsed.path == "/api/sync-sources":
+            self._send_json({
+                "ok": True,
+                "sources": _repo(settings).list_sync_sources(settings.account_key),
+            })
+            return
+        if parsed.path.startswith("/api/sync/jobs/"):
+            try:
+                job_id = int(parsed.path.removeprefix("/api/sync/jobs/").strip("/"))
+                job = _repo(settings).get_sync_job(job_id, settings.account_key)
+                if not job:
+                    self._send_json({"ok": False, "error": "sync job not found"}, status=404)
+                    return
+                with _SYNC_THREADS_LOCK:
+                    active_in_process = job_id in _SYNC_THREADS
+                    job["active_in_process"] = active_in_process
+                if job["status"] in {"pending", "running"} and not active_in_process:
+                    job["status"] = "interrupted"
+                    job["error"] = job.get("error") or "Сервис перезапускался, фоновая задача остановлена. Запустите выгрузку еще раз."
+                self._send_json({"ok": True, "job": job})
+            except ValueError:
+                self._send_json({"ok": False, "error": "invalid sync job id"}, status=400)
+            return
         self.send_error(404, "Not found")
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         settings = _settings_from_query(parsed.query)
+        # ═══════════════ СТРАНИЦЫ / ОБЩЕЕ ═══════════════
         if parsed.path == "/admin/connections":
             self._handle_create_connection()
             return
@@ -5263,59 +5268,10 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
         if parsed.path == "/account-settings/user/save":
             self._handle_save_user_settings(settings)
             return
-        if parsed.path == "/quality-settings/save":
-            self._handle_quality_settings_save(settings)
-            return
         if parsed.path == "/api/amo/webhook":
             self._handle_amo_webhook(settings)
             return
-        if parsed.path == "/api/conversations/post-note":
-            self._handle_conversation_post_note(settings)
-            return
-        if parsed.path == "/api/conversations/settings":
-            self._handle_conversation_settings(settings)
-            return
-        if parsed.path in {"/api/conversations/auto-run", "/api/conversations/auto-dry-run"}:
-            self._handle_conversation_auto(settings, dry_run=parsed.path.endswith("auto-dry-run"))
-            return
-        if parsed.path == "/api/conversations/export":
-            self._handle_conversation_export(settings)
-            return
-        if parsed.path == "/api/call-checklist-steps":
-            self._handle_call_checklist_step_create(settings)
-            return
-        if parsed.path.startswith("/api/call-checklist-steps/"):
-            self._handle_call_checklist_step_update_or_delete(settings, parsed.path)
-            return
-        if parsed.path == "/api/sync-queue/process":
-            self._handle_process_queue(settings)
-            return
-        if parsed.path == "/api/sync-queue/retry":
-            self._handle_queue_action(settings, parse_qs(parsed.query), action="retry")
-            return
-        if parsed.path == "/api/sync-queue/ignore":
-            self._handle_queue_action(settings, parse_qs(parsed.query), action="ignore")
-            return
-        if parsed.path == "/api/activity/rebuild-marts":
-            self._handle_rebuild_activity_marts(settings, parse_qs(parsed.query))
-            return
-        if parsed.path.startswith("/api/sync-sources/") and parsed.path.endswith("/resync"):
-            try:
-                source_id = int(parsed.path.removeprefix("/api/sync-sources/").removesuffix("/resync").strip("/"))
-            except ValueError:
-                self._send_json({"ok": False, "error": "invalid sync source id"}, status=400)
-                return
-            self._handle_resync_source(settings, source_id)
-            return
-        if parsed.path == "/api/kpi/rebuild":
-            self._handle_rebuild_kpi(settings, parse_qs(parsed.query))
-            return
-        if parsed.path == "/api/hub/cleanup":
-            self._handle_hub_cleanup(settings)
-            return
-        if parsed.path in {"/api/sync/bootstrap", "/api/sync/resync"}:
-            self._handle_sync_job(settings, "bootstrap" if parsed.path.endswith("bootstrap") else "resync")
-            return
+        # ═══════════════ BI / АНАЛИТИКА ═══════════════
         if parsed.path == "/api/dashboard-widgets":
             try:
                 payload = self._read_json()
@@ -5445,6 +5401,58 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "filter": analytics_filter.to_json()})
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        # ═══════════════ РЕЧЕВАЯ / КАЧЕСТВО ═══════════════
+        if parsed.path == "/quality-settings/save":
+            self._handle_quality_settings_save(settings)
+            return
+        if parsed.path == "/api/conversations/post-note":
+            self._handle_conversation_post_note(settings)
+            return
+        if parsed.path == "/api/conversations/settings":
+            self._handle_conversation_settings(settings)
+            return
+        if parsed.path in {"/api/conversations/auto-run", "/api/conversations/auto-dry-run"}:
+            self._handle_conversation_auto(settings, dry_run=parsed.path.endswith("auto-dry-run"))
+            return
+        if parsed.path == "/api/conversations/export":
+            self._handle_conversation_export(settings)
+            return
+        if parsed.path == "/api/call-checklist-steps":
+            self._handle_call_checklist_step_create(settings)
+            return
+        if parsed.path.startswith("/api/call-checklist-steps/"):
+            self._handle_call_checklist_step_update_or_delete(settings, parsed.path)
+            return
+        # ═══════════════ СИНХРА / ХАБ ═══════════════
+        if parsed.path == "/api/sync-queue/process":
+            self._handle_process_queue(settings)
+            return
+        if parsed.path == "/api/sync-queue/retry":
+            self._handle_queue_action(settings, parse_qs(parsed.query), action="retry")
+            return
+        if parsed.path == "/api/sync-queue/ignore":
+            self._handle_queue_action(settings, parse_qs(parsed.query), action="ignore")
+            return
+        if parsed.path == "/api/activity/rebuild-marts":
+            self._handle_rebuild_activity_marts(settings, parse_qs(parsed.query))
+            return
+        if parsed.path.startswith("/api/sync-sources/") and parsed.path.endswith("/resync"):
+            try:
+                source_id = int(parsed.path.removeprefix("/api/sync-sources/").removesuffix("/resync").strip("/"))
+            except ValueError:
+                self._send_json({"ok": False, "error": "invalid sync source id"}, status=400)
+                return
+            self._handle_resync_source(settings, source_id)
+            return
+        if parsed.path == "/api/kpi/rebuild":
+            self._handle_rebuild_kpi(settings, parse_qs(parsed.query))
+            return
+        if parsed.path == "/api/hub/cleanup":
+            self._handle_hub_cleanup(settings)
+            return
+        if parsed.path in {"/api/sync/bootstrap", "/api/sync/resync"}:
+            self._handle_sync_job(settings, "bootstrap" if parsed.path.endswith("bootstrap") else "resync")
             return
         if parsed.path != "/api/sync":
             self.send_error(404, "Not found")
