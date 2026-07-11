@@ -9,6 +9,7 @@ import json
 from amocrm_service.config import Settings, load_settings
 from amocrm_service.db import connect, init_db
 from amocrm_service.repository import Repository
+from amocrm_service.widgets import atomic_write_json
 
 
 SAFE_KEY_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
@@ -266,8 +267,7 @@ def save_account_settings(
 ) -> dict[str, Any]:
     root = data_root or load_settings().data_root
     path = account_settings_path(root, user_key, account_key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(path, settings)
     return {"path": str(path), "settings": settings}
 
 

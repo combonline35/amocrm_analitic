@@ -5451,6 +5451,9 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/hub/cleanup":
             self._handle_hub_cleanup(settings)
             return
+        if parsed.path == "/api/auto-sync/settings":
+            self._handle_auto_sync_settings(settings)
+            return
         if parsed.path in {"/api/sync/bootstrap", "/api/sync/resync"}:
             self._handle_sync_job(settings, "bootstrap" if parsed.path.endswith("bootstrap") else "resync")
             return
@@ -5921,6 +5924,31 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
             target_date = (query.get("date") or [""])[0] or None
             result = KpiService(_repo(settings)).rebuild_daily(target_date)
             self._send_json({"ok": True, "result": result})
+        except Exception as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=400)
+
+    def _handle_auto_sync_settings(self, settings: Any) -> None:
+        try:
+            payload = self._read_json()
+            raw_settings = load_account_settings(
+                user_key=settings.user_key,
+                account_key=settings.account_key,
+                data_root=settings.data_root,
+            )
+            current = raw_settings.get("auto_sync")
+            patch = dict(current) if isinstance(current, dict) else {}
+            patch["enabled"] = bool(payload.get("enabled"))
+            if isinstance(payload.get("groups"), list):
+                patch["groups"] = payload["groups"]
+            merged = normalize_auto_sync_settings(patch)
+            raw_settings["auto_sync"] = merged
+            save_account_settings(
+                user_key=settings.user_key,
+                account_key=settings.account_key,
+                settings=raw_settings,
+                data_root=settings.data_root,
+            )
+            self._send_json({"ok": True, "auto_sync": {"enabled": merged["enabled"]}})
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=400)
 
