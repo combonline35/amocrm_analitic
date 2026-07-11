@@ -38,9 +38,9 @@ API / UI / Telegram / natural language agent
 
 Считает первые отчеты по локальному зеркалу, без запросов в amoCRM на каждый отчет.
 
-### `api`
+### `server`
 
-FastAPI поверх sync/analytics.
+HTTP API и веб-интерфейс поверх sync/analytics (`server.py`, стандартная библиотека, без веб-фреймворков).
 
 ## Следующие шаги
 
