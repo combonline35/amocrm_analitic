@@ -22,6 +22,9 @@ data/
 # Widget result cache (client calcs)
 dashboard_widget_results.json
 
+# Smoke-test outputs (temporary comparison artifacts)
+smoke_*.txt
+
 # Build / transfer artifacts
 *.zip
 *.log
