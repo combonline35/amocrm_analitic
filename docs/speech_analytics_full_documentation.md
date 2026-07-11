@@ -127,10 +127,6 @@ CSV-экспорт результатов анализа.
 - `_handle_conversation_post_note` - записать заметку в amoCRM.
 - API для чек-листа: `/api/call-checklist-steps`.
 
-### `src/amocrm_service/api.py`
-
-FastAPI-эндпоинты. Есть альтернативные CRUD-эндпоинты для `call_checklist_step` и разговоров.
-
 ## Скрипты
 
 ### `scripts/recalc_one.py`

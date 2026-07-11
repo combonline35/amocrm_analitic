@@ -9,12 +9,6 @@ cd C:\Users\User\Documents\amoCRM\amocrm_service
 .\.venv\Scripts\python -m amocrm_service.server --host 0.0.0.0 --port 8010
 ```
 
-Для FastAPI-варианта:
-
-```powershell
-.\.venv\Scripts\uvicorn amocrm_service.api:app --host 0.0.0.0 --port 8010
-```
-
 ## Настройки `.env`
 
 Минимально нужны:

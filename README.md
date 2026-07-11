@@ -16,13 +16,7 @@ MVP-сервис для подключения к amoCRM, зеркалирова
   - `pipelines`
   - `lead_custom_fields`
   - `salesbots`
-- FastAPI ручки:
-  - `GET /health`
-  - `POST /sync/{entity_type}`
-  - `POST /sync/all`
-  - `GET /entities/{entity_type}`
-  - `GET /analytics/leads-by-status`
-  - `GET /analytics/tasks-summary`
+- HTTP API и веб-интерфейс: реализованы в `src/amocrm_service/server.py` (стандартная библиотека, без внешних веб-фреймворков). Полный список маршрутов см. в `do_GET`/`do_POST` внутри `server.py`.
 - CLI:
   - `init-db`
   - `sync`
@@ -65,7 +59,7 @@ python -m venv .venv
 API:
 
 ```powershell
-.\.venv\Scripts\uvicorn amocrm_service.api:app --reload
+.\.venv\Scripts\python -m amocrm_service.server --host 127.0.0.1 --port 8010
 ```
 
 ## Важно
