@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -102,6 +104,43 @@ def work_sources_path(db_path: Path) -> Path:
     return db_path.parent / "work_sources.json"
 
 
+def atomic_write_json(path: Path, payload: Any) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        shutil.copy2(path, Path(f"{path}.bak"))
+    tmp = Path(f"{path}.tmp")
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _preserve_corrupt(path: Path) -> None:
+    corrupt = Path(f"{path}.corrupt")
+    if not corrupt.exists():
+        try:
+            shutil.copy2(path, corrupt)
+        except OSError:
+            pass
+
+
+def _read_backup_list(path: Path) -> list[Any] | None:
+    backup = Path(f"{path}.bak")
+    if not backup.exists():
+        return None
+    try:
+        data = json.loads(backup.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, list) else None
+
+
 def widget_signature(widget: dict[str, Any]) -> str:
     payload = {
         "widget_type": widget.get("widget_type") or "analytics",
@@ -122,14 +161,13 @@ def load_widget_results_cache(db_path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
+        _preserve_corrupt(path)
         return {}
     return data if isinstance(data, dict) else {}
 
 
 def save_widget_results_cache(db_path: Path, cache: dict[str, Any]) -> dict[str, Any]:
-    path = widget_results_path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(widget_results_path(db_path), cache)
     return cache
 
 
@@ -139,18 +177,7 @@ def _safe_page_id(value: Any, fallback: str = DEFAULT_DASHBOARD_PAGE_ID) -> str:
     return safe[:60] or fallback
 
 
-def load_dashboard_pages(db_path: Path) -> list[dict[str, str]]:
-    path = dashboard_pages_path(db_path)
-    if not path.exists():
-        return save_dashboard_pages(db_path, DEFAULT_DASHBOARD_PAGES)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        data = []
-    return save_dashboard_pages(db_path, data if isinstance(data, list) else [])
-
-
-def save_dashboard_pages(db_path: Path, pages: list[dict[str, Any]]) -> list[dict[str, str]]:
+def _normalize_pages(pages: list[dict[str, Any]]) -> list[dict[str, str]]:
     normalized: list[dict[str, str]] = []
     seen: set[str] = set()
     for index, page in enumerate(pages):
@@ -166,9 +193,29 @@ def save_dashboard_pages(db_path: Path, pages: list[dict[str, Any]]) -> list[dic
         normalized = [dict(DEFAULT_DASHBOARD_PAGES[0])]
     if DEFAULT_DASHBOARD_PAGE_ID not in seen:
         normalized.insert(0, dict(DEFAULT_DASHBOARD_PAGES[0]))
+    return normalized
+
+
+def load_dashboard_pages(db_path: Path) -> list[dict[str, str]]:
     path = dashboard_pages_path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not path.exists():
+        return save_dashboard_pages(db_path, DEFAULT_DASHBOARD_PAGES)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        # Битый файл не затираем: откладываем копию и пробуем восстановиться
+        # из .bak в памяти; основной файл остаётся на месте для разбора.
+        _preserve_corrupt(path)
+        restored = _read_backup_list(path)
+        if restored is not None:
+            return _normalize_pages(restored)
+        return _normalize_pages(list(DEFAULT_DASHBOARD_PAGES))
+    return _normalize_pages(data if isinstance(data, list) else [])
+
+
+def save_dashboard_pages(db_path: Path, pages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    normalized = _normalize_pages(pages)
+    atomic_write_json(dashboard_pages_path(db_path), normalized)
     return normalized
 
 
@@ -179,6 +226,7 @@ def load_work_sources(db_path: Path) -> list[int]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
+        _preserve_corrupt(path)
         return []
     raw_ids = data.get("source_ids") if isinstance(data, dict) else data
     if not isinstance(raw_ids, list):
@@ -203,25 +251,31 @@ def save_work_sources(db_path: Path, source_ids: list[Any]) -> list[int]:
             continue
         if source_id > 0 and source_id not in normalized:
             normalized.append(source_id)
-    path = work_sources_path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"source_ids": normalized}, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(work_sources_path(db_path), {"source_ids": normalized})
     return normalized
 
 
 def load_widgets(db_path: Path) -> list[dict[str, Any]]:
     path = widgets_path(db_path)
     if not path.exists():
+        # Файла ещё не было — единственный случай, когда чтение создаёт его.
         return save_widgets(db_path, DEFAULT_WIDGETS)
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        # Битый файл не затираем: откладываем копию и пробуем восстановиться
+        # из .bak в памяти; основной файл остаётся на месте для разбора.
+        _preserve_corrupt(path)
+        restored = _read_backup_list(path)
+        if restored is not None:
+            return _normalize_widgets(restored)
+        return _normalize_widgets(DEFAULT_WIDGETS)
     if not isinstance(data, list):
         return []
-    return save_widgets(db_path, data)
+    return _normalize_widgets(data)
 
 
-def save_widgets(db_path: Path, widgets: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    path = widgets_path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _normalize_widgets(widgets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     for index, widget in enumerate(widgets):
         size = str(widget.get("size") or "medium")
@@ -242,7 +296,12 @@ def save_widgets(db_path: Path, widgets: list[dict[str, Any]]) -> list[dict[str,
             "layout": widget.get("layout") or {},
             "page_id": _safe_page_id(widget.get("page_id")),
         })
-    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    return normalized
+
+
+def save_widgets(db_path: Path, widgets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = _normalize_widgets(widgets)
+    atomic_write_json(widgets_path(db_path), normalized)
     return normalized
 
 
