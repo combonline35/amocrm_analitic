@@ -3060,6 +3060,19 @@ def render_dashboard(
             minute: '2-digit',
           }}).format(date);
         }};
+        const FRESHNESS_BADGE_MAX_AGE_MS = 60 * 60 * 1000;
+        const timeAgo = (value) => {{
+          if (!value) return '';
+          const then = new Date(value).getTime();
+          if (Number.isNaN(then)) return '';
+          const min = Math.max(0, Math.round((Date.now() - then) / 60000));
+          if (min < 1) return 'только что';
+          if (min < 60) return `${{min}} мин назад`;
+          const hours = Math.round(min / 60);
+          if (hours < 24) return `${{hours}} ч назад`;
+          const days = Math.round(hours / 24);
+          return `${{days}} дн назад`;
+        }};
         const freshnessLabel = (value) => {{
           const formatted = formatDateTime(value);
           return formatted ? `актуально на ${{formatted}}` : 'время среза не найдено';
@@ -3210,18 +3223,17 @@ def render_dashboard(
           return `${{selected}} этапов`;
         }};
         const sourceIsStale = (source) => {{
-          const checked = source?.checked_at ? new Date(source.checked_at) : null;
-          const hub = source?.hub_fresh_at ? new Date(source.hub_fresh_at) : null;
-          return Boolean(checked && hub && !Number.isNaN(checked.getTime()) && !Number.isNaN(hub.getTime()) && checked.getTime() + 1000 < hub.getTime());
+          const hub = source?.hub_fresh_at ? new Date(source.hub_fresh_at).getTime() : null;
+          if (hub === null || Number.isNaN(hub)) return true;
+          return (Date.now() - hub) > FRESHNESS_BADGE_MAX_AGE_MS;
         }};
         const sourceActualityLabel = (source) => {{
-          const checked = source?.checked_at ? new Date(source.checked_at) : null;
-          const hub = source?.hub_fresh_at ? new Date(source.hub_fresh_at) : null;
-          if (!checked || Number.isNaN(checked.getTime())) return 'статус: еще не проверялся';
-          if (hub && !Number.isNaN(hub.getTime()) && checked.getTime() + 1000 < hub.getTime()) {{
-            return `устарел, хаб свежее на ${{formatDateTime(source.hub_fresh_at)}}`;
+          const hub = source?.hub_fresh_at ? new Date(source.hub_fresh_at).getTime() : null;
+          if (hub === null || Number.isNaN(hub)) return 'нет данных';
+          if ((Date.now() - hub) > FRESHNESS_BADGE_MAX_AGE_MS) {{
+            return `данные не обновлялись ${{timeAgo(source.hub_fresh_at)}} — проверь синхронизацию`;
           }}
-          return `актуален · проверен ${{formatDateTime(source.checked_at)}} · автообновление включено`;
+          return `актуально · обновлено ${{timeAgo(source.hub_fresh_at)}}`;
         }};
         const sourceSubtitle = (sourceId) => {{
           const id = Number(sourceId || 0);
@@ -3255,8 +3267,8 @@ def render_dashboard(
               <div class="source-note-item"><span>Воронка</span><strong>${{safeText(sourcePipelineLabel(source))}}</strong></div>
               <div class="source-note-item"><span>Этапы</span><strong>${{safeText(sourceStagesLabel(source))}}</strong></div>
               <div class="source-note-item"><span>Сделок</span><strong>${{formatNumber(source.count)}}</strong></div>
-              <div class="source-note-item"><span>Данные на</span><strong>${{safeText(formatDateTime(source.fresh_at) || 'неизвестно')}}</strong></div>
-              <div class="source-note-item"><span>Проверен</span><strong>${{safeText(formatDateTime(source.checked_at) || 'еще нет')}}</strong></div>
+              <div class="source-note-item"><span>Данные на</span><strong>${{safeText((formatDateTime(source.hub_fresh_at) || 'неизвестно') + (timeAgo(source.hub_fresh_at) ? ' · ' + timeAgo(source.hub_fresh_at) : ''))}}</strong></div>
+              <div class="source-note-item"><span>Ручная проверка</span><strong>${{safeText(formatDateTime(source.checked_at) || 'еще нет')}}</strong></div>
               <div class="source-note-item"><span>Автообновление</span><strong>Включено</strong></div>
             </div>
           `;
@@ -3275,7 +3287,7 @@ def render_dashboard(
                 <span>Воронка<b>${{safeText(sourcePipelineLabel(source))}}</b></span>
                 <span>Этапы<b>${{safeText(sourceStagesLabel(source))}}</b></span>
                 <span>Сделок<b>${{formatNumber(source.count)}}</b></span>
-                <span>Проверен<b>${{safeText(formatDateTime(source.checked_at) || 'еще нет')}}</b></span>
+                <span>Ручная проверка<b>${{safeText(formatDateTime(source.checked_at) || 'еще нет')}}</b></span>
               </div>
               <div class="work-source-actions">
                 <button type="button" data-work-source-select="${{sourceId}}">Выбрать</button>
