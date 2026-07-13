@@ -321,6 +321,8 @@ def _dashboard_widget_results(settings: Any, force: bool = False, allow_backgrou
     next_cache: dict[str, Any] = {}
     results: dict[str, Any] = {}
     if cache_only and not force:
+        repo = _repo(settings)
+        data_version = _dashboard_data_version(repo, settings.account_key)
         needs_background_refresh = False
         for widget in widgets:
             widget_id = str(widget["id"])
@@ -328,16 +330,20 @@ def _dashboard_widget_results(settings: Any, force: bool = False, allow_backgrou
             cached = cache.get(widget_id)
             cache_matches_signature = isinstance(cached, dict) and cached.get("signature") == signature
             if cache_matches_signature and isinstance(cached.get("rows"), list):
+                cache_matches_data = cached.get("data_version") == data_version
+                is_stale = not cache_matches_data
+                if is_stale:
+                    needs_background_refresh = True
                 results[widget_id] = {
                     "ok": True,
                     "cached": True,
                     "cache_only": True,
                     "cached_at": cached.get("cached_at"),
                     "data_version": cached.get("data_version") or "",
-                    "current_data_version": cached.get("data_version") or "",
+                    "current_data_version": data_version,
                     "auto_refreshed": False,
-                    "stale": False,
-                    "refresh_pending": False,
+                    "stale": is_stale,
+                    "refresh_pending": is_stale,
                     "rows": cached.get("rows") or [],
                     "row_count": int(cached.get("row_count") or len(cached.get("rows") or [])),
                     "formula_result": cached.get("formula_result"),
