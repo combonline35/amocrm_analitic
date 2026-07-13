@@ -5,6 +5,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from datetime import date
 from typing import Any
 
 
@@ -96,6 +97,21 @@ FORMULA_DRAFT_SCHEMA: dict[str, Any] = {
 TEMPORAL_OPS = {"this_month", "previous_month", "this_week", "previous_week", "last_days", "date_between"}
 TEMPORAL_FIELD_TYPES = {"date", "datetime", "month"}
 
+# Основы названий месяцев (подстроки, ловят падежные формы: "июле", "июля", "августе").
+RU_MONTH_MARKERS = (
+    "январ", "феврал", "март", "апрел", "май", "мае", "мая",
+    "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр",
+)
+# 4-значный год 20xx как отдельное слово.
+YEAR_RE = re.compile(r"\b20\d{2}\b")
+
+
+def _mentions_named_month_or_year(user_prompt: str) -> bool:
+    prompt_cf = user_prompt.casefold()
+    if YEAR_RE.search(user_prompt):
+        return True
+    return any(marker in prompt_cf for marker in RU_MONTH_MARKERS)
+
 
 SYSTEM_PROMPT = """
 Critical rule: for status_id never use gt/gte/lt/lte as numeric comparison. If the user says "stage X and later", "from X onward", or "X и дальше", use op="in" with explicit status IDs from the ordered statuses list of the selected source/pipeline, starting with X and then every following stage.
@@ -131,9 +147,16 @@ Critical business rule: for measurement-conversion tables by "Замерщик" 
 - Разрезы: "по ответственным", "по менеджерам" -> group_by="responsible_user_id"; "по замерщикам" -> поле "Замерщик" из словаря; "по воронкам" -> "pipeline_id"; "по этапам" -> "status_id"; "по месяцам создания" -> "created_month"; "по рекламным площадкам/источникам заявок" -> подходящее custom field из словаря.
 - Если пользователь просит "созданные сделки в этом месяце по ответственным", формула должна быть count from leads, where created_at this_month, group_by responsible_user_id.
 - Если пользователь просит топ-N, ставь limit=N.
+- Если в запросе назван месяц или год ("за июль 2026", "за 2025 год", "за июнь") — ОБЯЗАТЕЛЬНО поставь фильтр по периоду, не считай без него. Названный месяц -> created_at date_between ["ГГГГ-ММ-01","ГГГГ-ММ-последний день"] или created_month op=eq value "ГГГГ-ММ". Год -> created_at date_between ["ГГГГ-01-01","ГГГГ-12-31"].
+- Если месяц назван без года ("за июнь") — используй ТЕКУЩИЙ год из строки "Сегодня" выше, не выдумывай прошлые годы.
+- Пример: "за июль 2026" -> count from leads, where created_at date_between ["2026-07-01","2026-07-31"] (или created_month op=eq value "2026-07").
 - Если ТЗ неоднозначное, всё равно собери лучший черновик и добавь вопросы в questions.
 - Ответ должен быть на русском.
 """.strip()
+
+
+def _dated_system_prompt() -> str:
+    return f"Сегодня {date.today().isoformat()}.\n{SYSTEM_PROMPT}"
 
 
 class AiFormulaError(RuntimeError):
@@ -170,6 +193,11 @@ def _simple_count_draft(
     if not (tokens & {"сделки", "сделок", "заявки", "заявок"}):
         return None
     if not (tokens & {"посчитай", "считай", "сколько", "всего", "количество"}):
+        return None
+
+    # Названный месяц ("июль 2026", "за июнь") или год ("2025 год") заготовка не
+    # умеет разложить в период — отдаём запрос модели, она делает это корректно.
+    if _mentions_named_month_or_year(user_prompt):
         return None
 
     fields = _dictionary_fields_by_entity(dictionary).get("leads", {})
@@ -739,7 +767,7 @@ def build_formula_draft(
         "temperature": 0.1,
         "max_tokens": 6000,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _dated_system_prompt()},
             {"role": "user", "content": json.dumps(context, ensure_ascii=False, separators=(",", ":"))},
         ],
         "response_format": {
