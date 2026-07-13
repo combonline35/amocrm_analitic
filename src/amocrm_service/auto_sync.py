@@ -9,7 +9,7 @@ DEFAULT_AUTO_SYNC_GROUPS = [
         "name": "hot",
         "label": "Горячие данные",
         "interval_minutes": 15,
-        "entities": ["leads", "tasks", "events"],
+        "entities": ["leads", "tasks", "contacts"],
     },
     {
         "name": "communications",
@@ -27,6 +27,7 @@ DEFAULT_AUTO_SYNC_GROUPS = [
             "lead_custom_fields",
             "contact_custom_fields",
             "company_custom_fields",
+            "events",
         ],
     },
 ]

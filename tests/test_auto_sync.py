@@ -79,3 +79,16 @@ def test_normalize_enable_preserves_groups():
     assert config["last_started_at"] == {}
     assert config["last_job_id"] == {}
     assert config["last_error"] is None
+
+
+def _group(name: str) -> dict:
+    return next(g for g in DEFAULT_AUTO_SYNC_GROUPS if g["name"] == name)
+
+
+def test_hot_group_has_contacts_not_events():
+    hot = _group("hot")
+    directory = _group("directory")
+    assert "contacts" in hot["entities"], "contacts должны быть в hot-группе"
+    assert "leads" in hot["entities"]
+    assert "events" not in hot["entities"], "events убраны из hot (тяжёлые, качаются реже)"
+    assert "events" in directory["entities"], "events перенесены в directory (раз в 6 часов)"
