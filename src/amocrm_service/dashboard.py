@@ -100,7 +100,6 @@ def render_dashboard(
     account_href = f"/app{query_suffix}"
     nav = f"""
         <nav class="top-nav" aria-label="Разделы аккаунта">
-          <a class="nav-link" href="/admin">Админка</a>
           <a class="nav-link" href="{account_href}">Аккаунт и выгрузки</a>
           <a class="nav-link {'active' if page == 'dashboard' else ''}" href="{dashboard_href}">Дашборд</a>
           <a class="nav-link" href="{activity_href}">Активность</a>

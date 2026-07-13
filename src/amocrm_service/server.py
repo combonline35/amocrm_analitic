@@ -2078,7 +2078,6 @@ def _account_suffix(settings: Any) -> str:
 def _account_nav(settings: Any, active: str) -> str:
     suffix = _account_suffix(settings)
     items = [
-        ("admin", "/admin", "Админка"),
         ("account", f"/app?{suffix}", "Аккаунт и выгрузки"),
         ("freshness", f"/freshness?{suffix}", "Актуальность"),
         ("dashboard", f"/dashboard?{suffix}", "Дашборд"),
@@ -2734,7 +2733,6 @@ def _render_account_settings_page(settings: Any, query_string: str = "") -> str:
         </div>
         <div class="hero-actions">
           <a class="button secondary-button" href="/app?{suffix}">К аккаунту</a>
-          <a class="button secondary-button" href="/admin">В админку</a>
         </div>
       </section>
       <section class="panel">
