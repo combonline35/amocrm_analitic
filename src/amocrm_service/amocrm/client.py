@@ -137,14 +137,25 @@ class AmoCRMClient:
             ),
         )
 
-    def iter_contacts(self):
-        return self.iter_paged_v4("/contacts", "contacts")
+    def _updated_from_params(self, updated_from: int | None) -> dict[str, Any] | None:
+        # tasks/contacts have no pipeline/status builder like leads; the only
+        # incremental knob is the updated_at watermark.
+        if updated_from is None:
+            return None
+        return {"filter[updated_at][from]": int(updated_from)}
+
+    def iter_contacts(self, *, updated_from: int | None = None):
+        return self.iter_paged_v4(
+            "/contacts", "contacts", params=self._updated_from_params(updated_from)
+        )
 
     def iter_companies(self):
         return self.iter_paged_v4("/companies", "companies")
 
-    def iter_tasks(self):
-        return self.iter_paged_v4("/tasks", "tasks")
+    def iter_tasks(self, *, updated_from: int | None = None):
+        return self.iter_paged_v4(
+            "/tasks", "tasks", params=self._updated_from_params(updated_from)
+        )
 
     def iter_customers(self):
         return self.iter_paged_v4("/customers", "customers")
@@ -181,8 +192,10 @@ class AmoCRMClient:
             ),
         )
 
-    def get_contacts(self) -> list[dict[str, Any]]:
-        return self.paged_v4("/contacts", "contacts")
+    def get_contacts(self, *, updated_from: int | None = None) -> list[dict[str, Any]]:
+        return self.paged_v4(
+            "/contacts", "contacts", params=self._updated_from_params(updated_from)
+        )
 
     def create_contact(
         self,
@@ -291,8 +304,10 @@ class AmoCRMClient:
     def get_companies(self) -> list[dict[str, Any]]:
         return self.paged_v4("/companies", "companies")
 
-    def get_tasks(self) -> list[dict[str, Any]]:
-        return self.paged_v4("/tasks", "tasks")
+    def get_tasks(self, *, updated_from: int | None = None) -> list[dict[str, Any]]:
+        return self.paged_v4(
+            "/tasks", "tasks", params=self._updated_from_params(updated_from)
+        )
 
     def get_entity_by_id(self, entity_type: str, entity_id: str) -> dict[str, Any]:
         path_params = {
