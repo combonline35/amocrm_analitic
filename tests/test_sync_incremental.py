@@ -4,7 +4,31 @@ import json
 
 from amocrm_service.db import connect, init_db
 from amocrm_service.repository import Repository
-from amocrm_service.sync import incremental_watermark
+from amocrm_service.sync import SyncService, incremental_watermark
+
+
+class _FakeLeadsClient:
+    """Minimal amoCRM client stand-in: mirrors the real iter_leads param building
+    and captures the resulting params so tests can assert the watermark filter."""
+
+    def __init__(self, batches):
+        self._batches = batches
+        self.captured_params = None
+
+    def iter_leads(self, *, pipeline_ids=None, status_ids=None, updated_from=None):
+        params = {"with": "contacts,companies,catalog_elements"}
+        if pipeline_ids:
+            params["filter[pipeline_id][]"] = [int(i) for i in pipeline_ids]
+        if status_ids:
+            params["filter[status_id][]"] = [int(i) for i in status_ids]
+        if updated_from is not None:
+            params["filter[updated_at][from]"] = int(updated_from)
+        self.captured_params = params
+        return iter(self._batches)
+
+    def __getattr__(self, name):
+        # Any other get_*/iter_* referenced only while building the getter dicts.
+        return lambda *a, **k: []
 
 
 def _repo(tmp_path):
@@ -64,3 +88,39 @@ def test_watermark_default_overlap_one_hour(tmp_path):
 
     # Default overlap must be exactly 3600 seconds (1 hour).
     assert incremental_watermark(repo, "acc", "leads") == 5_000_000 - 3600
+
+
+def _run_leads_job(repo, job_type, batches):
+    client = _FakeLeadsClient(batches)
+    service = SyncService(client, repo)
+    job_id = repo.start_sync_job("acc", job_type, ["leads"])
+    service.run_existing_sync_job(job_id, "acc", job_type, ["leads"])
+    return client
+
+
+def test_auto_leads_uses_watermark_filter(tmp_path):
+    repo = _repo(tmp_path)
+    _insert_raw(repo, "leads", "1", {"id": 1, "updated_at": 1_000_000})
+
+    # auto job + existing data -> params carry the watermark (MAX - 3600).
+    client = _run_leads_job(repo, "auto_hot", [[{"id": 9001, "updated_at": 1_234_567}]])
+
+    assert client.captured_params["filter[updated_at][from]"] == 1_000_000 - 3600
+
+
+def test_manual_leads_full_no_filter(tmp_path):
+    repo = _repo(tmp_path)
+    # Data present, so a watermark WOULD exist — but manual jobs must stay full.
+    _insert_raw(repo, "leads", "1", {"id": 1, "updated_at": 1_000_000})
+
+    client = _run_leads_job(repo, "bootstrap", [[{"id": 9001, "updated_at": 1_234_567}]])
+
+    assert "filter[updated_at][from]" not in client.captured_params
+
+
+def test_auto_leads_empty_full(tmp_path):
+    repo = _repo(tmp_path)
+    # auto job but empty base -> watermark is None -> full pull, no filter.
+    client = _run_leads_job(repo, "auto_hot", [[{"id": 9001, "updated_at": 1_234_567}]])
+
+    assert "filter[updated_at][from]" not in client.captured_params

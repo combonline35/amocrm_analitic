@@ -145,6 +145,7 @@ class SyncService:
         progress_callback: ProgressCallback | None = None,
         filters: dict | None = None,
         source_id: int | None = None,
+        updated_from: int | None = None,
     ) -> dict:
         getters = self._getters()
         if entity_type not in getters:
@@ -156,10 +157,15 @@ class SyncService:
             if progress_callback:
                 progress_callback(entity_type, count, pages_count)
             iter_getters = self._iter_getters()
-            if entity_type == "leads" and filters:
+            if entity_type == "leads":
+                lead_filters = filters or {}
+                # updated_from is only set for auto leads jobs (see
+                # run_existing_sync_job); when None this is the same request as
+                # before. Source pipeline/status filters still apply on top.
                 batches = self.client.iter_leads(
-                    pipeline_ids=filters.get("pipeline_ids") or None,
-                    status_ids=filters.get("status_ids") or None,
+                    pipeline_ids=lead_filters.get("pipeline_ids") or None,
+                    status_ids=lead_filters.get("status_ids") or None,
+                    updated_from=updated_from,
                 )
             elif entity_type in iter_getters:
                 batches = iter_getters[entity_type]()
@@ -314,12 +320,26 @@ class SyncService:
                         ],
                     )
 
+                # Incremental pull applies only to automatic leads jobs. Manual
+                # resync/bootstrap (and any source-scoped job) stay full so the
+                # emergency full re-pull is always available.
+                updated_from = None
+                if (
+                    entity_type == "leads"
+                    and job_type.startswith("auto_")
+                    and not source_id
+                ):
+                    updated_from = incremental_watermark(
+                        self.repository, account_key, "leads"
+                    )
+
                 try:
                     item = self.sync_entity(
                         entity_type,
                         progress_callback=publish_current_progress,
                         filters=filters,
                         source_id=source_id,
+                        updated_from=updated_from,
                     )
                     result.append(item)
                     items_count += int(item.get("items_count") or 0)

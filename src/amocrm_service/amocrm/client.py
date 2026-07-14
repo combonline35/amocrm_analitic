@@ -109,12 +109,15 @@ class AmoCRMClient:
         *,
         pipeline_ids: list[int] | None = None,
         status_ids: list[int] | None = None,
+        updated_from: int | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"with": "contacts,companies,catalog_elements"}
         if pipeline_ids:
             params["filter[pipeline_id][]"] = [int(item) for item in pipeline_ids]
         if status_ids:
             params["filter[status_id][]"] = [int(item) for item in status_ids]
+        if updated_from is not None:
+            params["filter[updated_at][from]"] = int(updated_from)
         return params
 
     def iter_leads(
@@ -122,11 +125,16 @@ class AmoCRMClient:
         *,
         pipeline_ids: list[int] | None = None,
         status_ids: list[int] | None = None,
+        updated_from: int | None = None,
     ):
         return self.iter_paged_v4(
             "/leads",
             "leads",
-            params=self._lead_params(pipeline_ids=pipeline_ids, status_ids=status_ids),
+            params=self._lead_params(
+                pipeline_ids=pipeline_ids,
+                status_ids=status_ids,
+                updated_from=updated_from,
+            ),
         )
 
     def iter_contacts(self):
@@ -161,11 +169,16 @@ class AmoCRMClient:
         *,
         pipeline_ids: list[int] | None = None,
         status_ids: list[int] | None = None,
+        updated_from: int | None = None,
     ) -> list[dict[str, Any]]:
         return self.paged_v4(
             "/leads",
             "leads",
-            params=self._lead_params(pipeline_ids=pipeline_ids, status_ids=status_ids),
+            params=self._lead_params(
+                pipeline_ids=pipeline_ids,
+                status_ids=status_ids,
+                updated_from=updated_from,
+            ),
         )
 
     def get_contacts(self) -> list[dict[str, Any]]:
