@@ -99,6 +99,34 @@ def test_formula_engine_treats_status_gte_as_pipeline_order(tmp_path):
     assert result["value"] == 2
 
 
+def test_source_counts_live_not_snapshot(tmp_path):
+    repo = _repo(tmp_path)
+    # Three live leads sitting in pipeline 555.
+    _insert_raw(repo, "leads", "1", {"id": 1, "pipeline_id": 555, "status_id": 10})
+    _insert_raw(repo, "leads", "2", {"id": 2, "pipeline_id": 555, "status_id": 10})
+    _insert_raw(repo, "leads", "3", {"id": 3, "pipeline_id": 555, "status_id": 10})
+    source_id = repo.create_sync_source(
+        "test",
+        name="Live source",
+        entity_types=["leads"],
+        pipeline_ids=[555],
+        status_ids=[],
+    )
+    # Frozen snapshot only knows 2 of them — the 3rd entered the funnel after
+    # the last source resync, so the old INNER JOIN would miss it.
+    repo.record_sync_source_entities(source_id, "leads", [{"id": 1}, {"id": 2}])
+    engine = FormulaEngine(repo)
+
+    result = engine.evaluate({
+        "op": "count",
+        "from": "leads",
+        "source_id": source_id,
+    })
+
+    # Live count must be 3 (all leads in pipeline 555), not 2 (stale snapshot).
+    assert result["value"] == 3
+
+
 def test_formula_engine_filters_month_fields_with_month_presets(tmp_path):
     repo = _repo(tmp_path)
     now = datetime.now(timezone.utc)

@@ -465,13 +465,22 @@ class FormulaEngine:
         params: list[Any] = [entity_type]
         join_sql = ""
         if source_id and entity_type == "leads":
-            join_sql = """
-            JOIN sync_source_entities AS source_link
-              ON source_link.entity_type = raw_entities.entity_type
-             AND source_link.entity_id = raw_entities.entity_id
-             AND source_link.source_id = ?
-            """
-            params.insert(0, source_id)
+            # Count against LIVE raw_entities using the source's stored
+            # pipeline/status conditions, instead of the frozen membership
+            # snapshot in sync_source_entities. Leads that entered the funnel
+            # after the last source resync are now counted too. An empty set
+            # means "no constraint on that dimension" (matches source config).
+            source_pipeline_ids, source_status_ids = self._source_filter_ids(source_id)
+            if source_pipeline_ids:
+                pipeline_sql = self._field_sql(entity_type, fields["pipeline_id"])
+                placeholders = ",".join("?" for _ in source_pipeline_ids)
+                where_parts.append(f"{pipeline_sql} IN ({placeholders})")
+                params.extend(sorted(source_pipeline_ids))
+            if source_status_ids:
+                status_sql = self._field_sql(entity_type, fields["status_id"])
+                placeholders = ",".join("?" for _ in source_status_ids)
+                where_parts.append(f"{status_sql} IN ({placeholders})")
+                params.extend(sorted(source_status_ids))
         conditions = []
         for key in ("where", "filters"):
             raw_conditions = node.get(key) or []
