@@ -1,6 +1,57 @@
 from __future__ import annotations
 
-from amocrm_service.ai_formula import _simple_count_draft
+from amocrm_service.ai_formula import _compact_dictionary, _simple_count_draft
+
+
+def _dict_with_field(field: dict) -> dict:
+    return {
+        "entities": [
+            {"value": "leads", "label": "Сделки", "count": 10, "fields": [field]}
+        ],
+        "operators": {},
+    }
+
+
+def test_compact_dictionary_includes_enum_values():
+    field = {
+        "value": "cf_1",
+        "label": "Категория",
+        "type": "text",
+        "groupable": True,
+        "enums": ["A", "B", "C"],
+    }
+    compact = _compact_dictionary(_dict_with_field(field), user_prompt="разбивка по категория")
+    fields = compact["entities"][0]["fields"]
+    assert len(fields) == 1
+    assert fields[0]["values"] == ["A", "B", "C"]
+
+
+def test_compact_dictionary_limits_enum():
+    enums = [str(i) for i in range(30)]
+    field = {
+        "value": "cf_2",
+        "label": "Статус",
+        "type": "text",
+        "groupable": True,
+        "enums": enums,
+    }
+    compact = _compact_dictionary(_dict_with_field(field), user_prompt="фильтр по статус")
+    fields = compact["entities"][0]["fields"]
+    assert len(fields[0]["values"]) == 20
+    assert fields[0]["values"] == enums[:20]
+
+
+def test_non_select_no_values():
+    field = {
+        "value": "cf_3",
+        "label": "Комментарий",
+        "type": "text",
+        "groupable": True,
+    }
+    compact = _compact_dictionary(_dict_with_field(field), user_prompt="фильтр по комментарий")
+    fields = compact["entities"][0]["fields"]
+    assert len(fields) == 1
+    assert "values" not in fields[0]
 
 
 DICTIONARY = {

@@ -1434,12 +1434,19 @@ def _compact_dictionary(dictionary: dict[str, Any], *, user_prompt: str = "") ->
         for field in entity.get("fields") or []:
             if not _keep_dictionary_field(entity_value, field, prompt_tokens):
                 continue
-            fields.append({
+            compact_field = {
                 "value": field.get("value"),
                 "label": field.get("label"),
                 "type": field.get("type"),
                 "groupable": bool(field.get("groupable")),
-            })
+            }
+            # select/multiselect fields carry their allowed values in "enums";
+            # pass a capped list so the AI can filter by them (cap avoids blowing
+            # the prompt budget on fields with dozens of options).
+            enums = field.get("enums")
+            if enums:
+                compact_field["values"] = list(enums)[:20]
+            fields.append(compact_field)
         if entity_value == "leads":
             fields = _prioritize_fields(fields, prompt_tokens)[:140]
         else:

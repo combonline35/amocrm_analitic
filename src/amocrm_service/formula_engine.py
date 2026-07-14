@@ -161,7 +161,7 @@ class FormulaDictionaryService:
                 continue
             field_type = str(payload.get("type") or "unknown")
             label = html.unescape(str(payload.get("name") or row["name"] or f"Поле {field_id}"))
-            result.append({
+            field_dict = {
                 "value": f"cf_{field_id}",
                 "label": label,
                 "entity": entity_type,
@@ -171,7 +171,15 @@ class FormulaDictionaryService:
                 "field_id": field_id,
                 "groupable": True,
                 "path": f"cf:{field_id}",
-            })
+            }
+            if field_type in {"select", "multiselect"}:
+                # Expose the allowed enum values so the AI can filter by them.
+                field_dict["enums"] = [
+                    str(enum.get("value"))
+                    for enum in (payload.get("enums") or [])
+                    if enum.get("value") is not None
+                ]
+            result.append(field_dict)
             if field_type in {"date", "birthday", "date_time", "date_time_range"}:
                 result.append({
                     "value": f"cf_month_{field_id}",
