@@ -137,6 +137,8 @@ Critical business rule: for measurement-conversion tables by "Замерщик" 
 - Для KPI-таблицы по воронке не считай последующие колонки по всей истории. Колонки "Состоялось", "Договора", "Успешно" должны сохранять базовый период и базовые условия из колонки "Назначено", плюс свой этап.
 - Агрегация: {"op":"count","from":"leads","source_id":1,"where":[...]}.
 - Поля фильтра: field, op, value. Допустимые op: eq, neq, like, in, not_in, gt, gte, lt, lte, between, date_between, this_month, previous_month, this_week, previous_week, last_days, empty, not_empty.
+- Если у поля в словаре есть список values (это select-поле) — фильтруй по нему op="eq" (одно значение) или op="in" (несколько), а value бери ТОЧНО из списка values этого поля. Не выдумывай значения, которых нет в values.
+- Если пользователь называет значение поля (например "поле X = Y", "где X заполнено значением Y") — найди поле с подходящим label и подставь value из его values, максимально близкое к названному.
 - Если пользователь говорит "поле указано", "заполнено", "есть замерщик" — используй op="not_empty" и value=null. Если "не указано" — op="empty".
 - Для даты можно использовать this_month/previous_month/this_week/previous_week/last_days/date_between.
 - Для месяца можно использовать this_month/previous_month/date_between/eq.
@@ -1470,6 +1472,16 @@ def _keep_dictionary_field(entity_value: str, field: dict[str, Any], prompt_toke
     field_tokens = _text_tokens(f"{value} {label}")
     if field_tokens & prompt_tokens:
         return True
+    # select-fields (those exposing enum values) survive a looser substring match
+    # on their label, so they are not dropped when the user names the field
+    # loosely (e.g. "Целевой" vs label "Целевое поле"). Kept narrow: only fields
+    # with enums, and only tokens of length >= 4 to avoid pulling in everything.
+    if field.get("enums"):
+        label_tokens = {token for token in _text_tokens(label) if len(token) >= 4}
+        prompt_long = {token for token in prompt_tokens if len(token) >= 4}
+        for label_token in label_tokens:
+            if any(label_token in prompt_token or prompt_token in label_token for prompt_token in prompt_long):
+                return True
     if entity_value == "leads" and "замер" in prompt_tokens and any("замер" in token for token in field_tokens):
         return True
     if entity_value == "leads" and "дпвс" in prompt_tokens and any("дпвс" in token for token in field_tokens):
