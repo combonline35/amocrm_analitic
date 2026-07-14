@@ -2528,6 +2528,7 @@ def render_dashboard(
         let lastFormulaDiagnostics = null;
         let formulaDictionaryCache = null;
         let lastAiFormulaDraft = null;
+        let aiFormulaPinned = false;
         let lastAmoFilterImport = null;
         const apiUrl = (path, extra = {{}}) => {{
           const params = new URLSearchParams(window.location.search);
@@ -4127,14 +4128,19 @@ def render_dashboard(
           if (!row || row.dataset.formulaFilterBound === '1') return;
           row.dataset.formulaFilterBound = '1';
           row.querySelector('[data-formula-filter-field]')?.addEventListener('change', () => {{
+            aiFormulaPinned = false;
             refreshFormulaFilterOperator(row);
             syncFormulaEditorFromMask();
           }});
           row.querySelector('[data-formula-filter-op]')?.addEventListener('change', () => {{
+            aiFormulaPinned = false;
             refreshFormulaFilterOperator(row);
             syncFormulaEditorFromMask();
           }});
-          row.querySelector('[data-formula-filter-value]')?.addEventListener('input', syncFormulaEditorFromMask);
+          row.querySelector('[data-formula-filter-value]')?.addEventListener('input', () => {{
+            aiFormulaPinned = false;
+            syncFormulaEditorFromMask();
+          }});
         }};
         const addFormulaFilterRow = () => {{
           if (!formulaFilterListEl) return null;
@@ -4265,6 +4271,9 @@ def render_dashboard(
         }};
         const syncFormulaEditorFromMask = () => {{
           if (!formulaEditorEl) return;
+          // An applied AI draft pins the editor: mask events must not overwrite
+          // it until the user deliberately edits the mask (which clears the pin).
+          if (aiFormulaPinned) return;
           const formula = buildFormulaFromMask();
           formulaEditorEl.value = JSON.stringify(formula, null, 2);
           if (formulaReadableEl) formulaReadableEl.innerHTML = describeFormulaMask(formula);
@@ -4360,6 +4369,9 @@ def render_dashboard(
             const value = condition.value;
             valueEl.value = Array.isArray(value) ? value.join(', ') : (value === true || value === undefined || value === null ? '' : String(value));
           }});
+          // amo-filter import is a fresh, deliberate formula — release the pin so
+          // the editor picks up the imported mask conditions.
+          aiFormulaPinned = false;
           syncFormulaEditorFromMask();
           if (amoFilterStatusEl) amoFilterStatusEl.textContent = `Применил ${{conditions.length}} условий к формуле. Считаю предпросмотр...`;
           try {{
@@ -4561,6 +4573,7 @@ def render_dashboard(
         const applyAiFormulaDraft = () => {{
           if (!lastAiFormulaDraft?.formula || !formulaEditorEl) return;
           formulaEditorEl.value = JSON.stringify(lastAiFormulaDraft.formula, null, 2);
+          aiFormulaPinned = true;
           if (lastAiFormulaDraft.title) setFormulaTitle(lastAiFormulaDraft.title, {{ force: true }});
           if (formulaSizeEl && lastAiFormulaDraft.size) formulaSizeEl.value = lastAiFormulaDraft.size;
           if (formulaReadableEl) {{
@@ -4623,17 +4636,29 @@ def render_dashboard(
         syncFormulaTitleInputs(formulaTitleEl, formulaPreviewTitleEl);
         syncFormulaTitleInputs(formulaPreviewTitleEl, formulaTitleEl);
         formulaSourceEl?.addEventListener('change', () => {{
+          aiFormulaPinned = false;
           syncFormulaEditorFromMask();
         }});
         formulaEntityEl?.addEventListener('change', () => {{
+          aiFormulaPinned = false;
           refreshFormulaFieldControls();
           syncFormulaEditorFromMask();
         }});
-        formulaOpEl?.addEventListener('change', syncFormulaEditorFromMask);
-        formulaValueFieldEl?.addEventListener('change', syncFormulaEditorFromMask);
-        formulaGroupFieldEl?.addEventListener('change', syncFormulaEditorFromMask);
+        formulaOpEl?.addEventListener('change', () => {{
+          aiFormulaPinned = false;
+          syncFormulaEditorFromMask();
+        }});
+        formulaValueFieldEl?.addEventListener('change', () => {{
+          aiFormulaPinned = false;
+          syncFormulaEditorFromMask();
+        }});
+        formulaGroupFieldEl?.addEventListener('change', () => {{
+          aiFormulaPinned = false;
+          syncFormulaEditorFromMask();
+        }});
         refreshFormulaFilterRows().forEach(bindFormulaFilterRow);
         formulaFilterAddBtn?.addEventListener('click', () => {{
+          aiFormulaPinned = false;
           addFormulaFilterRow();
           syncFormulaEditorFromMask();
         }});
