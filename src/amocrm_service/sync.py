@@ -47,6 +47,55 @@ def normalize_entity_type(entity_type: str) -> str:
     return ENTITY_TYPE_ALIASES.get(entity_type, entity_type)
 
 
+# Which payload time field marks "last change" per entity. Most entities carry
+# ``updated_at`` (mirrored into the indexed ``raw_entities.updated_at`` column);
+# ``events`` only carry ``created_at`` and leave that column empty.
+WATERMARK_TIME_FIELD: dict[str, str] = {
+    "leads": "updated_at",
+    "contacts": "updated_at",
+    "tasks": "updated_at",
+    "events": "created_at",
+}
+
+
+def incremental_watermark(
+    repo: Repository,
+    account_key: str,
+    entity_type: str,
+    overlap_seconds: int = 3600,
+) -> int | None:
+    """Return the incremental-sync cutoff timestamp for ``entity_type``.
+
+    Takes MAX of the entity's time field across stored ``raw_entities`` rows and
+    subtracts ``overlap_seconds`` (default 1 hour), so records mutated around the
+    previous run's boundary are re-fetched — the upsert is idempotent, so the
+    overlap costs nothing but closes the boundary-loss gap.
+
+    Returns ``None`` when nothing is stored yet (MAX is NULL/0), signalling that
+    the increment is not applicable and a full pull should run instead.
+
+    ``account_key`` is accepted for call-site symmetry; the hub database is
+    already per-account, so no additional filtering is needed.
+    """
+    time_field = WATERMARK_TIME_FIELD.get(entity_type, "updated_at")
+    if time_field == "updated_at":
+        row = repo.conn.execute(
+            "SELECT MAX(updated_at) FROM raw_entities WHERE entity_type = ?",
+            (entity_type,),
+        ).fetchone()
+    else:
+        # Time lives only inside the JSON payload for this entity.
+        row = repo.conn.execute(
+            "SELECT MAX(CAST(json_extract(payload_json, ?) AS INTEGER)) "
+            "FROM raw_entities WHERE entity_type = ?",
+            (f"$.{time_field}", entity_type),
+        ).fetchone()
+    max_ts = row[0] if row else None
+    if not max_ts:
+        return None
+    return int(max_ts) - int(overlap_seconds)
+
+
 class SyncService:
     def __init__(self, client: "AmoCRMClient", repository: Repository):
         self.client = client
@@ -96,6 +145,7 @@ class SyncService:
         progress_callback: ProgressCallback | None = None,
         filters: dict | None = None,
         source_id: int | None = None,
+        updated_from: int | None = None,
     ) -> dict:
         getters = self._getters()
         if entity_type not in getters:
@@ -107,10 +157,15 @@ class SyncService:
             if progress_callback:
                 progress_callback(entity_type, count, pages_count)
             iter_getters = self._iter_getters()
-            if entity_type == "leads" and filters:
+            if entity_type == "leads":
+                lead_filters = filters or {}
+                # updated_from is only set for auto leads jobs (see
+                # run_existing_sync_job); when None this is the same request as
+                # before. Source pipeline/status filters still apply on top.
                 batches = self.client.iter_leads(
-                    pipeline_ids=filters.get("pipeline_ids") or None,
-                    status_ids=filters.get("status_ids") or None,
+                    pipeline_ids=lead_filters.get("pipeline_ids") or None,
+                    status_ids=lead_filters.get("status_ids") or None,
+                    updated_from=updated_from,
                 )
             elif entity_type in iter_getters:
                 batches = iter_getters[entity_type]()
@@ -265,12 +320,26 @@ class SyncService:
                         ],
                     )
 
+                # Incremental pull applies only to automatic leads jobs. Manual
+                # resync/bootstrap (and any source-scoped job) stay full so the
+                # emergency full re-pull is always available.
+                updated_from = None
+                if (
+                    entity_type == "leads"
+                    and job_type.startswith("auto_")
+                    and not source_id
+                ):
+                    updated_from = incremental_watermark(
+                        self.repository, account_key, "leads"
+                    )
+
                 try:
                     item = self.sync_entity(
                         entity_type,
                         progress_callback=publish_current_progress,
                         filters=filters,
                         source_id=source_id,
+                        updated_from=updated_from,
                     )
                     result.append(item)
                     items_count += int(item.get("items_count") or 0)
