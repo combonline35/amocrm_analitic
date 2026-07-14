@@ -167,6 +167,10 @@ class SyncService:
                     status_ids=lead_filters.get("status_ids") or None,
                     updated_from=updated_from,
                 )
+            elif entity_type == "tasks":
+                batches = self.client.iter_tasks(updated_from=updated_from)
+            elif entity_type == "contacts":
+                batches = self.client.iter_contacts(updated_from=updated_from)
             elif entity_type in iter_getters:
                 batches = iter_getters[entity_type]()
             else:
@@ -320,17 +324,17 @@ class SyncService:
                         ],
                     )
 
-                # Incremental pull applies only to automatic leads jobs. Manual
-                # resync/bootstrap (and any source-scoped job) stay full so the
-                # emergency full re-pull is always available.
+                # Incremental pull applies only to automatic leads/tasks/contacts
+                # jobs. Manual resync/bootstrap (and any source-scoped job) stay
+                # full so the emergency full re-pull is always available.
                 updated_from = None
                 if (
-                    entity_type == "leads"
+                    entity_type in ("leads", "tasks", "contacts")
                     and job_type.startswith("auto_")
                     and not source_id
                 ):
                     updated_from = incremental_watermark(
-                        self.repository, account_key, "leads"
+                        self.repository, account_key, entity_type
                     )
 
                 try:
