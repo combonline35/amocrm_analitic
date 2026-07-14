@@ -1363,6 +1363,13 @@ def _run_sync_job_background(
             filters=filters,
             source_id=source_id,
         )
+        # Данные записаны, data_version сдвинут — освежаем кэш виджетов ЭТОГО
+        # аккаунта в фоне, чтобы дашборд не отставал даже без его открытия.
+        # Пересчёт вторичен: его ошибка не должна ронять синхру.
+        try:
+            _start_dashboard_background_refresh(settings)
+        except Exception as refresh_exc:
+            print(f"dashboard refresh after sync failed ({settings.account_key}): {refresh_exc}")
     except Exception as exc:
         repo.finish_sync_job(job_id, "failed", error=str(exc))
     finally:
