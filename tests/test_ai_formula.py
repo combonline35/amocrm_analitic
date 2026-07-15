@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from amocrm_service.ai_formula import (
+    _clean_formula,
     _compact_dictionary,
     _inherit_table_base_conditions,
     _simple_count_draft,
@@ -195,3 +196,30 @@ def test_inherit_single_column_unchanged():
     }
     result = _inherit_table_base_conditions(table)
     assert result == table
+
+
+def test_clean_formula_moves_value_to_const():
+    # Привычка модели: value:100 в multiply-узле с пустым right — авторемонт
+    # переносит константу в полноценный const-узел до валидации.
+    raw = {
+        "op": "multiply",
+        "left": {"op": "divide", "left": {"op": "count", "from": "leads"}, "right": {"op": "count", "from": "leads"}},
+        "right": None,
+        "value": 100,
+    }
+    cleaned = _clean_formula(raw)
+    assert cleaned["right"] == {"op": "const", "value": 100}
+    assert "value" not in cleaned
+    assert cleaned["left"]["op"] == "divide"
+
+
+def test_clean_formula_drops_extra_value_when_sides_filled():
+    raw = {
+        "op": "multiply",
+        "left": {"op": "count", "from": "leads"},
+        "right": {"op": "const", "value": 100},
+        "value": 100,
+    }
+    cleaned = _clean_formula(raw)
+    assert cleaned["right"] == {"op": "const", "value": 100}
+    assert "value" not in cleaned

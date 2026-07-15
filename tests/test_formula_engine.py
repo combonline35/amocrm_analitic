@@ -257,6 +257,60 @@ def test_formula_engine_builds_table_from_formula_columns(tmp_path):
     assert rows["11"]["Конверсия"] == 0.5
 
 
+def test_series_times_scalar_broadcasts(tmp_path):
+    repo = _repo(tmp_path)
+    _insert_raw(repo, "leads", "1", {"id": 1, "responsible_user_id": 11})
+    _insert_raw(repo, "leads", "2", {"id": 2, "responsible_user_id": 11})
+    _insert_raw(repo, "leads", "3", {"id": 3, "responsible_user_id": 12})
+    _insert_raw(repo, "leads", "4", {"id": 4, "responsible_user_id": 12})
+    _insert_raw(repo, "leads", "5", {"id": 5, "responsible_user_id": 12})
+    _insert_raw(repo, "leads", "6", {"id": 6, "responsible_user_id": 12})
+
+    result = FormulaEngine(repo).evaluate({
+        "op": "multiply",
+        "left": {"op": "count", "from": "leads", "group_by": "responsible_user_id"},
+        "right": {"op": "const", "value": 100},
+    })
+
+    rows = {row["key"]: row for row in result["rows"]}
+    assert result["kind"] == "series"
+    assert "__scalar__" not in rows
+    assert rows["11"]["value"] == 200
+    assert rows["12"]["value"] == 400
+
+
+def test_percent_column_in_table(tmp_path):
+    repo = _repo(tmp_path)
+    _insert_raw(repo, "leads", "1", {"id": 1, "responsible_user_id": 11, "status_id": 20})
+    _insert_raw(repo, "leads", "2", {"id": 2, "responsible_user_id": 11, "status_id": 10})
+    _insert_raw(repo, "leads", "3", {"id": 3, "responsible_user_id": 12, "status_id": 20})
+
+    def count(where=None):
+        node = {"op": "count", "from": "leads", "group_by": "responsible_user_id"}
+        if where:
+            node["where"] = where
+        return node
+
+    target = [{"field": "status_id", "op": "eq", "value": 20, "value_type": "number"}]
+    result = FormulaEngine(repo).evaluate({
+        "op": "table",
+        "columns": {
+            "Всего": count(),
+            "Целевые": count(target),
+            "Конверсия, %": {
+                "op": "multiply",
+                "left": {"op": "divide", "left": count(target), "right": count()},
+                "right": {"op": "const", "value": 100},
+            },
+        },
+    })
+
+    rows = {row["key"]: row for row in result["rows"]}
+    assert len(rows) == 2  # строк ровно по числу групп, без __scalar__
+    assert rows["11"]["Конверсия, %"] == 50.0
+    assert rows["12"]["Конверсия, %"] == 100.0
+
+
 def _insert_source(repo: Repository, source_id: int, pipeline_ids: list[int]) -> None:
     repo.conn.execute(
         """

@@ -135,6 +135,8 @@ Critical business rule: for measurement-conversion tables by "Замерщик" 
 - Базовые операции: count, sum, avg, min, max.
 - Арифметика: add, subtract, multiply, divide с left/right.
 - У add/subtract/multiply/divide левая и правая часть всегда должны быть объектами формулы. Для процента "Договора / Состоялось" продублируй две count-формулы с одинаковым group_by, а не ссылайся на названия колонок.
+- Константа в арифметике — ОТДЕЛЬНЫЙ узел: {"op":"const","value":100} в right. НЕ клади value:100 в сам multiply/divide-узел — right при этом останется пустым и формула будет забракована.
+- Конверсия в процентах = (подмножество / база) × 100: у divide left — count С фильтром (целевые), right — count БЕЗ фильтра (все). Пример: «конверсия в целевые в процентах» -> {"op":"multiply","left":{"op":"divide","left":<count целевых>,"right":<count всех>},"right":{"op":"const","value":100}}.
 - Таблица: возвращай columns массивом: [{"title":"Название","formula": <formula>}]. Сервер превратит его в объект.
 - Для KPI-таблицы по воронке не считай последующие колонки по всей истории. Колонки "Состоялось", "Договора", "Успешно" должны сохранять базовый период и базовые условия из колонки "Назначено", плюс свой этап.
 - Если по ТЗ колонки РАЗНЫЕ («первый столбец — все сделки, второй — где X = Y»), условие специфичной колонки ставь ТОЛЬКО в её формулу, не добавляй его в остальные. Общие для всех фильтры (период, источник, группировка) повторяй в каждой колонке.
@@ -982,7 +984,28 @@ def _clean_formula(node: Any) -> Any:
                 cleaned[key] = columns
             continue
         cleaned[key] = _clean_formula(value)
-    return cleaned
+    return _normalize_arithmetic_const(cleaned)
+
+
+def _normalize_arithmetic_const(node: dict[str, Any]) -> dict[str, Any]:
+    """Авторемонт привычки модели: «×100» приходит как value:100 прямо в
+    multiply-узле с пустым right — переносим число в полноценный const-узел,
+    иначе _formula_validation_errors забракует формулу. Если обе стороны уже
+    заполнены, лишний value просто убирается.
+    """
+    op = str(node.get("op") or "").lower()
+    if op not in {"add", "subtract", "multiply", "divide"}:
+        return node
+    value = node.get("value")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return node
+    result = dict(node)
+    result.pop("value", None)
+    if not isinstance(result.get("right"), (dict, int, float)):
+        result["right"] = {"op": "const", "value": value}
+    elif not isinstance(result.get("left"), (dict, int, float)):
+        result["left"] = {"op": "const", "value": value}
+    return result
 
 
 def _formula_validation_errors(node: Any, path: str = "formula") -> list[str]:
