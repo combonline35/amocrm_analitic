@@ -2039,9 +2039,9 @@ def render_dashboard(
           grid-column: span 2;
         }}
         .widget-control-panel .widget-columns-block {{
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
+          display: grid;
+          gap: 5px;
+          align-content: start;
         }}
         .widget-columns-title {{
           color: #8a9bb3;
@@ -2050,27 +2050,81 @@ def render_dashboard(
           letter-spacing: .1em;
           text-transform: uppercase;
         }}
+        .widget-columns-list {{
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          max-height: min(240px, 40vh);
+          overflow-y: auto;
+          padding: 4px;
+          border: 1px solid #cfe2ff;
+          border-radius: 11px;
+          background: #fff;
+        }}
         .widget-column-row {{
           display: flex;
           align-items: center;
-          gap: 6px;
-        }}
-        .widget-column-row button {{
-          min-height: 26px;
-          padding: 0 8px;
-          border: 1px solid #cfe2ff;
+          gap: 8px;
+          min-height: 32px;
+          padding: 0 6px;
           border-radius: 8px;
-          background: #f4f9ff;
-          color: #0f3b72;
+        }}
+        .widget-column-row:hover {{
+          background: #eaf4ff;
+        }}
+        .widget-control-panel label.widget-column-toggle {{
+          display: flex;
+          flex: 1;
+          min-width: 0;
+          align-items: center;
+          gap: 8px;
+          margin: 0;
+          color: #12355b;
+          font-size: 13px;
+          font-weight: 700;
+          letter-spacing: 0;
+          text-transform: none;
           cursor: pointer;
         }}
-        .widget-column-row button:disabled {{
-          opacity: .4;
-          cursor: default;
-        }}
-        .widget-column-row .checkbox-control {{
-          flex: 1;
+        .widget-control-panel .widget-column-toggle input {{
+          flex: none;
+          width: 16px;
+          min-height: 16px;
           margin: 0;
+        }}
+        .widget-column-name {{
+          min-width: 0;
+          overflow: hidden;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+        }}
+        .widget-column-row:has(input:not(:checked)) .widget-column-name {{
+          color: #8a9bb3;
+          font-weight: 600;
+        }}
+        .widget-column-move {{
+          display: flex;
+          flex: none;
+          gap: 4px;
+        }}
+        .widget-column-move button {{
+          width: 26px;
+          min-height: 26px;
+          padding: 0;
+          border: 1px solid #bfdbfe;
+          border-radius: 8px;
+          background: #eaf4ff;
+          color: #0f3b72;
+          font-weight: 900;
+          line-height: 1;
+          cursor: pointer;
+        }}
+        .widget-column-move button:hover:not(:disabled) {{
+          background: #dbeafe;
+        }}
+        .widget-column-move button:disabled {{
+          opacity: .35;
+          cursor: default;
         }}
         .widget-control-panel .panel-actions {{
           display: flex;
@@ -4978,16 +5032,20 @@ def render_dashboard(
           const columnsBlock = columns.length > 1 ? `
               <div class="widget-columns-block wide-field" data-widget-columns-block>
                 <span class="widget-columns-title">Колонки: порядок и видимость</span>
-                ${{orderedPanelColumns.map((column, index) => `
-                  <div class="widget-column-row" data-widget-column="${{safeText(column)}}">
-                    <button type="button" data-widget-column-move="up" title="Выше" ${{index === 0 ? 'disabled' : ''}}>&#8593;</button>
-                    <button type="button" data-widget-column-move="down" title="Ниже" ${{index === orderedPanelColumns.length - 1 ? 'disabled' : ''}}>&#8595;</button>
-                    <label class="checkbox-control">
-                      <input type="checkbox" data-widget-column-toggle ${{hiddenPanelColumns.has(column) ? '' : 'checked'}}>
-                      <span>${{safeText(column)}}</span>
-                    </label>
-                  </div>
-                `).join('')}}
+                <div class="widget-columns-list">
+                  ${{orderedPanelColumns.map((column, index) => `
+                    <div class="widget-column-row" data-widget-column="${{safeText(column)}}">
+                      <label class="widget-column-toggle" title="${{safeText(column)}}">
+                        <input type="checkbox" data-widget-column-toggle ${{hiddenPanelColumns.has(column) ? '' : 'checked'}}>
+                        <span class="widget-column-name">${{safeText(column)}}</span>
+                      </label>
+                      <div class="widget-column-move">
+                        <button type="button" data-widget-column-move="up" title="Выше" ${{index === 0 ? 'disabled' : ''}}>&#8593;</button>
+                        <button type="button" data-widget-column-move="down" title="Ниже" ${{index === orderedPanelColumns.length - 1 ? 'disabled' : ''}}>&#8595;</button>
+                      </div>
+                    </div>
+                  `).join('')}}
+                </div>
               </div>` : '';
           return `
             <div class="widget-control-panel" data-widget-settings-panel>
