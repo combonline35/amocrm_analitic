@@ -407,13 +407,14 @@ class FormulaEngine:
         raw_columns = node.get("columns") or {}
         if not isinstance(raw_columns, dict) or not raw_columns:
             raise ValueError("table.columns must be a non-empty object")
+        root_source_id = self._optional_int(node.get("source_id"))
         columns = []
         row_index: dict[str, dict[str, Any]] = {}
         scalar_index = 0
         for name, child in raw_columns.items():
             column_name = str(name)
             columns.append(column_name)
-            value = self._eval_node(child, scope)
+            value = self._eval_node(self._inherit_source_id(child, root_source_id), scope)
             if value.kind == "series":
                 for item in value.rows or []:
                     key = str(item.get("key") or "")
@@ -452,6 +453,30 @@ class FormulaEngine:
             for column in columns:
                 row.setdefault(column, 0)
         return FormulaValue(kind="table", rows=rows, meta={"columns": columns})
+
+    def _inherit_source_id(self, node: Any, source_id: int | None) -> Any:
+        """Наследует source_id table-узла в колонки, где он не задан.
+
+        _aggregate читает source_id только со своего узла, поэтому без
+        наследования source_id на корне таблицы молча игнорировался бы и
+        колонка считала бы весь хаб. Собственный source_id колонки главнее
+        корневого; без корневого source_id узлы не меняются.
+        """
+        if not source_id or not isinstance(node, dict):
+            return node
+        result = dict(node)
+        op = str(result.get("op") or "").lower()
+        if op in {"count", "sum", "avg", "min", "max"} and not result.get("source_id"):
+            result["source_id"] = source_id
+        for key in ("left", "right", "return", "body"):
+            if isinstance(result.get(key), dict):
+                result[key] = self._inherit_source_id(result[key], source_id)
+        variables = result.get("vars")
+        if isinstance(variables, dict):
+            result["vars"] = {name: self._inherit_source_id(child, source_id) for name, child in variables.items()}
+        if isinstance(result.get("columns"), dict):
+            result["columns"] = {title: self._inherit_source_id(child, source_id) for title, child in result["columns"].items()}
+        return result
 
     def _aggregate(self, node: dict[str, Any], op: str) -> FormulaValue:
         entity_type = str(node.get("from") or node.get("entity") or "leads")
