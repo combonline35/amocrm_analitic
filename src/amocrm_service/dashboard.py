@@ -2038,6 +2038,40 @@ def render_dashboard(
         .widget-control-panel .wide-field {{
           grid-column: span 2;
         }}
+        .widget-control-panel .widget-columns-block {{
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }}
+        .widget-columns-title {{
+          color: #8a9bb3;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: .1em;
+          text-transform: uppercase;
+        }}
+        .widget-column-row {{
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }}
+        .widget-column-row button {{
+          min-height: 26px;
+          padding: 0 8px;
+          border: 1px solid #cfe2ff;
+          border-radius: 8px;
+          background: #f4f9ff;
+          color: #0f3b72;
+          cursor: pointer;
+        }}
+        .widget-column-row button:disabled {{
+          opacity: .4;
+          cursor: default;
+        }}
+        .widget-column-row .checkbox-control {{
+          flex: 1;
+          margin: 0;
+        }}
         .widget-control-panel .panel-actions {{
           display: flex;
           gap: 8px;
@@ -3155,6 +3189,9 @@ def render_dashboard(
           const visibleColumns = Array.isArray(settings.visible_columns)
             ? settings.visible_columns.filter((column) => columns.includes(column))
             : [];
+          const hiddenColumns = Array.isArray(settings.hidden_columns)
+            ? settings.hidden_columns.filter((column) => columns.includes(column))
+            : [];
           return {{
             sort_by: sortBy,
             sort_dir: settings.sort_dir === 'asc' ? 'asc' : 'desc',
@@ -3162,6 +3199,7 @@ def render_dashboard(
             zero_column: zeroColumn,
             row_limit: Number.isFinite(limit) ? limit : 0,
             visible_columns: visibleColumns,
+            hidden_columns: hiddenColumns,
           }};
         }};
         const rowColumnValue = (row, column) => {{
@@ -3186,7 +3224,14 @@ def render_dashboard(
         }};
         const applyFormulaTableSettings = (result, rows, columns, settings = {{}}) => {{
           const normalized = normalizeTableSettings(settings, columns);
-          const displayColumns = normalized.visible_columns.length ? normalized.visible_columns : columns;
+          // Порядок показа = visible_columns; колонки формулы, которых нет ни в
+          // видимых, ни в скрытых (появились позже настройки), дописываются в
+          // хвост, а не пропадают молча. hidden_columns скрывает явно.
+          let displayColumns = normalized.visible_columns.length
+            ? normalized.visible_columns.concat(columns.filter(
+                (column) => !normalized.visible_columns.includes(column) && !normalized.hidden_columns.includes(column)))
+            : columns.filter((column) => !normalized.hidden_columns.includes(column));
+          if (!displayColumns.length) displayColumns = columns;
           let nextRows = [...rows];
           if (normalized.hide_zero_rows) {{
             nextRows = nextRows.filter((row) => !isZeroTableRow(row, displayColumns, normalized));
@@ -4926,6 +4971,24 @@ def render_dashboard(
           const settings = normalizeTableSettings(widget.table_settings || {{}}, columns);
           const sortOptions = ['', tableLabelColumn].concat(columns);
           const zeroOptions = [''].concat(columns);
+          const orderedPanelColumns = settings.visible_columns.length
+            ? settings.visible_columns.concat(columns.filter((column) => !settings.visible_columns.includes(column)))
+            : columns;
+          const hiddenPanelColumns = new Set(settings.hidden_columns);
+          const columnsBlock = columns.length > 1 ? `
+              <div class="widget-columns-block wide-field" data-widget-columns-block>
+                <span class="widget-columns-title">Колонки: порядок и видимость</span>
+                ${{orderedPanelColumns.map((column, index) => `
+                  <div class="widget-column-row" data-widget-column="${{safeText(column)}}">
+                    <button type="button" data-widget-column-move="up" title="Выше" ${{index === 0 ? 'disabled' : ''}}>&#8593;</button>
+                    <button type="button" data-widget-column-move="down" title="Ниже" ${{index === orderedPanelColumns.length - 1 ? 'disabled' : ''}}>&#8595;</button>
+                    <label class="checkbox-control">
+                      <input type="checkbox" data-widget-column-toggle ${{hiddenPanelColumns.has(column) ? '' : 'checked'}}>
+                      <span>${{safeText(column)}}</span>
+                    </label>
+                  </div>
+                `).join('')}}
+              </div>` : '';
           return `
             <div class="widget-control-panel" data-widget-settings-panel>
               <label class="wide-field">
@@ -4977,6 +5040,7 @@ def render_dashboard(
                 <input type="checkbox" data-widget-setting="hide_zero_rows" ${{settings.hide_zero_rows ? 'checked' : ''}}>
                 <span>Скрыть нулевые строки</span>
               </label>
+              ${{columnsBlock}}
               <div class="panel-actions">
                 <button type="button" data-widget-action="close-settings" data-widget-id="${{safeText(widget.id || '')}}">Готово</button>
               </div>
@@ -5173,7 +5237,40 @@ def render_dashboard(
             }}, 6000);
           }}
         }};
+        const collectWidgetColumnSettings = (panel) => {{
+          const visible = [];
+          const hidden = [];
+          panel.querySelectorAll('[data-widget-column]').forEach((row) => {{
+            const name = row.dataset.widgetColumn;
+            if (!name) return;
+            const checked = row.querySelector('[data-widget-column-toggle]')?.checked;
+            (checked ? visible : hidden).push(name);
+          }});
+          return {{ visible, hidden }};
+        }};
         savedDashboardEl?.addEventListener('click', async (event) => {{
+          const moveButton = event.target.closest('[data-widget-column-move]');
+          if (moveButton) {{
+            if (!dashboardEditMode()) return;
+            const row = moveButton.closest('[data-widget-column]');
+            const panel = moveButton.closest('[data-widget-settings-panel]');
+            const moveWidgetId = moveButton.closest('.saved-widget')?.dataset.widgetId;
+            if (!row || !panel || !moveWidgetId) return;
+            const sibling = moveButton.dataset.widgetColumnMove === 'up'
+              ? row.previousElementSibling
+              : row.nextElementSibling;
+            if (!sibling || !sibling.hasAttribute('data-widget-column')) return;
+            // Переставляем строку в DOM и сохраняем порядок целиком —
+            // updateWidgetViewSettings перерисует виджет и панель.
+            if (moveButton.dataset.widgetColumnMove === 'up') sibling.before(row); else sibling.after(row);
+            const {{ visible, hidden }} = collectWidgetColumnSettings(panel);
+            try {{
+              await updateWidgetViewSettings(moveWidgetId, {{ table_settings: {{ visible_columns: visible, hidden_columns: hidden }} }});
+            }} catch (error) {{
+              savedDashboardEl.innerHTML = `<div class="report-empty">Ошибка настроек виджета: ${{safeText(error.message)}}</div>`;
+            }}
+            return;
+          }}
           const button = event.target.closest('[data-widget-action]');
           if (!button) {{
             if (!event.target.closest('.widget-menu-wrap')) {{
@@ -5227,6 +5324,25 @@ def render_dashboard(
           }});
         }});
         savedDashboardEl?.addEventListener('change', async (event) => {{
+          const columnToggle = event.target.closest('[data-widget-column-toggle]');
+          if (columnToggle) {{
+            if (!dashboardEditMode()) return;
+            const panel = columnToggle.closest('[data-widget-settings-panel]');
+            const toggleWidgetId = columnToggle.closest('.saved-widget')?.dataset.widgetId;
+            if (!panel || !toggleWidgetId) return;
+            const {{ visible, hidden }} = collectWidgetColumnSettings(panel);
+            if (!visible.length) {{
+              // Последнюю видимую колонку скрыть нельзя — откатываем чекбокс.
+              columnToggle.checked = true;
+              return;
+            }}
+            try {{
+              await updateWidgetViewSettings(toggleWidgetId, {{ table_settings: {{ visible_columns: visible, hidden_columns: hidden }} }});
+            }} catch (error) {{
+              savedDashboardEl.innerHTML = `<div class="report-empty">Ошибка настроек виджета: ${{safeText(error.message)}}</div>`;
+            }}
+            return;
+          }}
           const control = event.target.closest('[data-widget-setting]');
           if (!control) return;
           if (!dashboardEditMode()) return;
