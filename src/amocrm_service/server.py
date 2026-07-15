@@ -5360,6 +5360,7 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
                     dictionary=dictionary,
                     sources=sources,
                     default_source=default_source,
+                    users=repo.all_payloads("users"),
                 )
                 print(
                     "AI formula draft generated "

@@ -129,6 +129,8 @@ Critical business rule: for measurement-conversion tables by "Замерщик" 
 - Используй только сущности, поля и source_id из переданного словаря.
 - Если передан default_source, считай внутри него и ставь его id в source_id, кроме случаев когда пользователь явно просит весь хаб или все источники.
 - Если пользователь называет этап, выбирай status_id только из default_source.statuses или из statuses нужного source_id. Не используй похожие этапы из других источников.
+- В контексте есть список users (менеджеры аккаунта: id + name). Если пользователь называет менеджера/ответственного по имени («сделки менеджера Иванова», «у Петрова», «по Сырцову») — ставь фильтр {"field":"responsible_user_id","op":"eq","value":<id из users>}; для нескольких менеджеров — op="in" со списком id.
+- Имя менеджера сопоставляй по частичному совпадению с name из users (фамилии или имени достаточно, падеж может отличаться). Если имя не найдено в users — не выдумывай id, добавь уточняющий вопрос в questions.
 - Формула должна быть объектом нашего DSL.
 - Базовые операции: count, sum, avg, min, max.
 - Арифметика: add, subtract, multiply, divide с left/right.
@@ -733,6 +735,7 @@ def build_formula_draft(
     dictionary: dict[str, Any],
     sources: list[dict[str, Any]],
     default_source: dict[str, Any] | None = None,
+    users: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     deterministic = _measurement_conversion_draft(
         user_prompt=user_prompt,
@@ -784,6 +787,9 @@ def build_formula_draft(
         "default_source": _compact_source(default_source) if default_source else None,
         "dictionary": _compact_dictionary(dictionary, user_prompt=user_prompt),
     }
+    compact_users = _compact_users(users)
+    if compact_users:
+        context["users"] = compact_users
     request_body = {
         "model": config["model"],
         "temperature": 0.1,
@@ -1400,6 +1406,24 @@ def _extract_chat_content(response: dict[str, Any]) -> str:
                 chunks.append(str(item.get("text") or item.get("content") or ""))
         return "".join(chunks)
     raise AiFormulaError("AI API не вернул текст ответа")
+
+
+def _compact_users(users: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    # Справочник менеджеров для модели: только id + name, с лимитом, чтобы
+    # крупный аккаунт не раздул промпт.
+    result: list[dict[str, Any]] = []
+    for user in users or []:
+        try:
+            user_id = int(user.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        name = str(user.get("name") or "").strip()
+        if not user_id or not name:
+            continue
+        result.append({"id": user_id, "name": name})
+        if len(result) >= 50:
+            break
+    return result
 
 
 def _compact_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
