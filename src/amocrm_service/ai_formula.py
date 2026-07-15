@@ -118,7 +118,7 @@ Critical rule: for status_id never use gt/gte/lt/lte as numeric comparison. If t
 Critical rule: if the user names a custom date/month field, use that exact date/month field for the period filter. Do not replace it with created_at unless the user explicitly says "creation date" or "created".
 Critical rule: for complex KPI tables, keep the JSON compact: one table formula with columns, no prose inside formula fields, no invented custom field ids.
 Critical rule: for percent columns in a table, use op="divide" with full aggregate formulas in both left and right. Never put null, strings, column names, or references in left/right.
-Critical rule: in funnel/KPI tables, the base cohort filters apply to every column. If a period, "assigned", "filled", source, or row group is defined for the table, repeat these filters in each count/sum formula; stage columns only add stricter status filters.
+Critical rule: in funnel/KPI tables, the base cohort filters apply to every column. If a period, "assigned", "filled", source, or row group is defined for the table, repeat these filters in each count/sum formula; stage columns only add stricter status filters. But if the user asks for one column WITHOUT a condition (e.g. "всего сделок") and another column WITH a condition ("где X = Y"), do NOT copy that column-specific condition into the other columns — it belongs only to its own column's formula.
 Exception: if a column has its own explicit period field, do not inherit another date/month condition from the base cohort. Example: "Договора по Дата договора" must use "Дата договора" as the only period filter and must not also filter by "Дата и время замера" or a measurement date field.
 Critical business rule: for measurement-conversion tables by "Замерщик" / "замерщики", the base column "Назначено" means the scheduled measurement datetime field ("Дата и время замера"), not the status-entered date field "ДПвС-ЗАМЕР НАЗНАЧЕН". Use "Т_замер состоялся" for "Состоялось"; use "Дата договора" for contract counts when the user asks for contracts in the same period.
 Ты собираешь безопасные формулы для аналитического дашборда amoCRM.
@@ -137,6 +137,7 @@ Critical business rule: for measurement-conversion tables by "Замерщик" 
 - У add/subtract/multiply/divide левая и правая часть всегда должны быть объектами формулы. Для процента "Договора / Состоялось" продублируй две count-формулы с одинаковым group_by, а не ссылайся на названия колонок.
 - Таблица: возвращай columns массивом: [{"title":"Название","formula": <formula>}]. Сервер превратит его в объект.
 - Для KPI-таблицы по воронке не считай последующие колонки по всей истории. Колонки "Состоялось", "Договора", "Успешно" должны сохранять базовый период и базовые условия из колонки "Назначено", плюс свой этап.
+- Если по ТЗ колонки РАЗНЫЕ («первый столбец — все сделки, второй — где X = Y»), условие специфичной колонки ставь ТОЛЬКО в её формулу, не добавляй его в остальные. Общие для всех фильтры (период, источник, группировка) повторяй в каждой колонке.
 - Агрегация: {"op":"count","from":"leads","source_id":1,"where":[...]}.
 - Поля фильтра: field, op, value. Допустимые op: eq, neq, like, in, not_in, gt, gte, lt, lte, between, date_between, this_month, previous_month, this_week, previous_week, last_days, empty, not_empty.
 - Если у поля в словаре есть список values (это select-поле) — фильтруй по нему op="eq" (одно значение) или op="in" (несколько), а value бери ТОЧНО из списка values этого поля. Не выдумывай значения, которых нет в values.
@@ -1240,50 +1241,46 @@ def _inherit_table_base_conditions(node: Any) -> Any:
 
 
 def _table_base_scope(columns: dict[str, Any]) -> dict[str, Any]:
-    candidates: list[dict[str, Any]] = []
-    for title, formula in columns.items():
-        for aggregate in _iter_aggregate_nodes(formula):
-            conditions = [
-                condition
-                for condition in _formula_conditions(aggregate)
-                if _is_base_condition(condition)
-            ]
-            if not conditions:
-                continue
-            title_score = 20 if any(marker in str(title).casefold() for marker in ("назнач", "заяв", "план", "всего")) else 0
-            score = title_score + len(conditions)
-            if aggregate.get("group_by"):
-                score += 5
-            candidates.append({
-                "score": score,
-                "from": aggregate.get("from") or aggregate.get("entity") or "leads",
-                "source_id": aggregate.get("source_id"),
-                "group_by": aggregate.get("group_by"),
-                "conditions": conditions,
-            })
-    if not candidates:
+    """База для наследования — ПЕРЕСЕЧЕНИЕ base-условий агрегатных колонок.
+
+    Раньше базой становилась одна «лучшая» колонка, и её специфичные условия
+    (например cf-фильтр «Целевой = 1») размножались во все остальные — колонки
+    становились одинаковыми. Теперь в базу входит только условие, которое и так
+    стоит во ВСЕХ агрегатных колонках (сравнение по field+op+нормализованному
+    value); специфика отдельных колонок не размножается. Вычисляемые колонки
+    (проценты, арифметика) в пересечении не участвуют — база доезжает до их
+    вложенных агрегатов на этапе применения.
+    """
+    aggregates: list[dict[str, Any]] = []
+    for formula in columns.values():
+        if isinstance(formula, dict) and str(formula.get("op") or "").lower() in {"count", "sum", "avg", "min", "max"}:
+            aggregates.append(formula)
+    if len(aggregates) < 2:
         return {"conditions": []}
-    candidates.sort(key=lambda item: item["score"], reverse=True)
-    return candidates[0]
-
-
-def _iter_aggregate_nodes(node: Any) -> list[dict[str, Any]]:
-    if not isinstance(node, dict):
-        return []
-    op = str(node.get("op") or "").lower()
-    if op in {"count", "sum", "avg", "min", "max"}:
-        return [node]
-    result: list[dict[str, Any]] = []
-    if op == "table" and isinstance(node.get("columns"), dict):
-        for child in node["columns"].values():
-            result.extend(_iter_aggregate_nodes(child))
-    for key in ("left", "right", "return", "body"):
-        result.extend(_iter_aggregate_nodes(node.get(key)))
-    variables = node.get("vars") or node.get("variables")
-    if isinstance(variables, dict):
-        for child in variables.values():
-            result.extend(_iter_aggregate_nodes(child))
-    return result
+    common_keys: set[tuple[str, str, str]] | None = None
+    for aggregate in aggregates:
+        keys = {
+            _condition_key(condition)
+            for condition in _formula_conditions(aggregate)
+            if _is_base_condition(condition)
+        }
+        common_keys = keys if common_keys is None else common_keys & keys
+        if not common_keys:
+            return {"conditions": []}
+    first = aggregates[0]
+    conditions: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for condition in _formula_conditions(first):
+        key = _condition_key(condition)
+        if key in common_keys and key not in seen:
+            seen.add(key)
+            conditions.append(condition)
+    return {
+        "from": first.get("from") or first.get("entity") or "leads",
+        "source_id": first.get("source_id"),
+        "group_by": first.get("group_by"),
+        "conditions": conditions,
+    }
 
 
 def _formula_conditions(node: dict[str, Any]) -> list[dict[str, Any]]:

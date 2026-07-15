@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from amocrm_service.ai_formula import _compact_dictionary, _simple_count_draft
+from amocrm_service.ai_formula import (
+    _compact_dictionary,
+    _inherit_table_base_conditions,
+    _simple_count_draft,
+)
 
 
 def _dict_with_field(field: dict) -> dict:
@@ -139,3 +143,55 @@ def test_simple_count_still_handles_previous_month():
     assert draft is not None
     where = draft["formula"].get("where") or []
     assert any(c.get("field") == "created_at" and c.get("op") == "previous_month" for c in where)
+
+
+def _count_column(where: list[dict]) -> dict:
+    return {"op": "count", "from": "leads", "group_by": "responsible_user_id", "where": where}
+
+
+THIS_MONTH = {"field": "created_at", "op": "this_month", "value": None}
+CF_FILTER = {"field": "cf_1", "op": "eq", "value": "1"}
+
+
+def test_inherit_keeps_column_specific_filter():
+    # cf-фильтр специфичной колонки НЕ размножается: наследуется только
+    # пересечение условий всех агрегатных колонок (здесь — только период).
+    table = {
+        "op": "table",
+        "columns": {
+            "Все сделки": _count_column([dict(THIS_MONTH)]),
+            "Целевые": _count_column([dict(THIS_MONTH), dict(CF_FILTER)]),
+        },
+    }
+    result = _inherit_table_base_conditions(table)
+    all_where = result["columns"]["Все сделки"].get("where") or []
+    target_where = result["columns"]["Целевые"].get("where") or []
+    assert not any(str(c.get("field", "")).startswith("cf_") for c in all_where)
+    assert [c.get("op") for c in all_where] == ["this_month"]
+    assert any(str(c.get("field", "")).startswith("cf_") for c in target_where)
+
+
+def test_inherit_propagates_common_period():
+    # Пересечение пустое (у первой колонки нет условий) — ничего не наследуем:
+    # колонка «все сделки» не получает чужой период.
+    table = {
+        "op": "table",
+        "columns": {
+            "Все сделки": _count_column([]),
+            "За месяц": _count_column([dict(THIS_MONTH)]),
+        },
+    }
+    result = _inherit_table_base_conditions(table)
+    assert not (result["columns"]["Все сделки"].get("where") or [])
+    assert [c.get("op") for c in result["columns"]["За месяц"].get("where") or []] == ["this_month"]
+
+
+def test_inherit_single_column_unchanged():
+    table = {
+        "op": "table",
+        "columns": {
+            "Целевые": _count_column([dict(THIS_MONTH), dict(CF_FILTER)]),
+        },
+    }
+    result = _inherit_table_base_conditions(table)
+    assert result == table
