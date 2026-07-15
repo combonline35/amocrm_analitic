@@ -223,3 +223,36 @@ def test_clean_formula_drops_extra_value_when_sides_filled():
     cleaned = _clean_formula(raw)
     assert cleaned["right"] == {"op": "const", "value": 100}
     assert "value" not in cleaned
+
+
+DIVIDE_RATIO = {
+    "op": "divide",
+    "left": {"op": "count", "from": "leads", "where": [{"field": "cf_1", "op": "eq", "value": "1"}]},
+    "right": {"op": "count", "from": "leads"},
+}
+
+
+def test_table_percent_column_returns_ratio():
+    # Конвенция: колонка таблицы отдаёт долю, фронт сам умножает на 100.
+    raw = {
+        "op": "table",
+        "columns": [
+            {
+                "title": "Конверсия, %",
+                "formula": {"op": "multiply", "left": dict(DIVIDE_RATIO), "right": {"op": "const", "value": 100}},
+            },
+        ],
+    }
+    cleaned = _clean_formula(raw)
+    column = cleaned["columns"]["Конверсия, %"]
+    assert column["op"] == "divide"
+    assert column["left"]["op"] == "count"
+
+
+def test_scalar_percent_keeps_multiply():
+    # Скалярный ответ (корень не table) — ×100 легитимен, не трогаем.
+    raw = {"op": "multiply", "left": dict(DIVIDE_RATIO), "right": {"op": "const", "value": 100}}
+    cleaned = _clean_formula(raw)
+    assert cleaned["op"] == "multiply"
+    assert cleaned["right"] == {"op": "const", "value": 100}
+    assert cleaned["left"]["op"] == "divide"

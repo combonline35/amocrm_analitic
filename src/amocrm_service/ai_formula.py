@@ -117,7 +117,7 @@ SYSTEM_PROMPT = """
 Critical rule: for status_id never use gt/gte/lt/lte as numeric comparison. If the user says "stage X and later", "from X onward", or "X и дальше", use op="in" with explicit status IDs from the ordered statuses list of the selected source/pipeline, starting with X and then every following stage.
 Critical rule: if the user names a custom date/month field, use that exact date/month field for the period filter. Do not replace it with created_at unless the user explicitly says "creation date" or "created".
 Critical rule: for complex KPI tables, keep the JSON compact: one table formula with columns, no prose inside formula fields, no invented custom field ids.
-Critical rule: for percent columns in a table, use op="divide" with full aggregate formulas in both left and right. Never put null, strings, column names, or references in left/right.
+Critical rule: for percent columns in a table, use op="divide" with full aggregate formulas in both left and right. Never put null, strings, column names, or references in left/right. A table percent column must return the RATIO itself (e.g. 0.79) — do NOT multiply by 100 inside table columns; the UI formats ratios as percents and colors them by thresholds.
 Critical rule: in funnel/KPI tables, the base cohort filters apply to every column. If a period, "assigned", "filled", source, or row group is defined for the table, repeat these filters in each count/sum formula; stage columns only add stricter status filters. But if the user asks for one column WITHOUT a condition (e.g. "всего сделок") and another column WITH a condition ("где X = Y"), do NOT copy that column-specific condition into the other columns — it belongs only to its own column's formula.
 Exception: if a column has its own explicit period field, do not inherit another date/month condition from the base cohort. Example: "Договора по Дата договора" must use "Дата договора" as the only period filter and must not also filter by "Дата и время замера" or a measurement date field.
 Critical business rule: for measurement-conversion tables by "Замерщик" / "замерщики", the base column "Назначено" means the scheduled measurement datetime field ("Дата и время замера"), not the status-entered date field "ДПвС-ЗАМЕР НАЗНАЧЕН". Use "Т_замер состоялся" for "Состоялось"; use "Дата договора" for contract counts when the user asks for contracts in the same period.
@@ -136,7 +136,10 @@ Critical business rule: for measurement-conversion tables by "Замерщик" 
 - Арифметика: add, subtract, multiply, divide с left/right.
 - У add/subtract/multiply/divide левая и правая часть всегда должны быть объектами формулы. Для процента "Договора / Состоялось" продублируй две count-формулы с одинаковым group_by, а не ссылайся на названия колонок.
 - Константа в арифметике — ОТДЕЛЬНЫЙ узел: {"op":"const","value":100} в right. НЕ клади value:100 в сам multiply/divide-узел — right при этом останется пустым и формула будет забракована.
-- Конверсия в процентах = (подмножество / база) × 100: у divide left — count С фильтром (целевые), right — count БЕЗ фильтра (все). Пример: «конверсия в целевые в процентах» -> {"op":"multiply","left":{"op":"divide","left":<count целевых>,"right":<count всех>},"right":{"op":"const","value":100}}.
+- Умножение на 100 применяй ТОЛЬКО когда результат — одно число (не таблица) и пользователь явно просит проценты. Внутри столбцов таблицы ×100 ЗАПРЕЩЕНО — возвращай долю.
+- Конверсия = подмножество / база: у divide left — count С фильтром (целевые), right — count БЕЗ фильтра (все). Два случая:
+  колонка таблицы «Конверсия, %» -> ЧИСТЫЙ divide, ДОЛЯ (например 0.79), БЕЗ ×100 — интерфейс сам покажет проценты и подсветку;
+  скалярный ответ «конверсия в целевые в процентах» (одно число) -> {"op":"multiply","left":{"op":"divide","left":<count целевых>,"right":<count всех>},"right":{"op":"const","value":100}}.
 - Таблица: возвращай columns массивом: [{"title":"Название","formula": <formula>}]. Сервер превратит его в объект.
 - Для KPI-таблицы по воронке не считай последующие колонки по всей истории. Колонки "Состоялось", "Договора", "Успешно" должны сохранять базовый период и базовые условия из колонки "Назначено", плюс свой этап.
 - Если по ТЗ колонки РАЗНЫЕ («первый столбец — все сделки, второй — где X = Y»), условие специфичной колонки ставь ТОЛЬКО в её формулу, не добавляй его в остальные. Общие для всех фильтры (период, источник, группировка) повторяй в каждой колонке.
@@ -969,7 +972,7 @@ def _clean_formula(node: Any) -> Any:
                 title = str(item.get("title") or "").strip()
                 formula = _clean_formula(item.get("formula"))
                 if title and isinstance(formula, dict):
-                    columns[title] = formula
+                    columns[title] = _unwrap_percent_multiply(formula)
             if columns:
                 cleaned[key] = columns
             continue
@@ -979,12 +982,41 @@ def _clean_formula(node: Any) -> Any:
                 formula = formula_value.get("formula") if isinstance(formula_value, dict) and "formula" in formula_value else formula_value
                 formula = _clean_formula(formula)
                 if title and isinstance(formula, dict):
-                    columns[str(title)] = formula
+                    columns[str(title)] = _unwrap_percent_multiply(formula)
             if columns:
                 cleaned[key] = columns
             continue
         cleaned[key] = _clean_formula(value)
     return _normalize_arithmetic_const(cleaned)
+
+
+def _is_const_100(node: Any) -> bool:
+    if isinstance(node, bool):
+        return False
+    if isinstance(node, (int, float)):
+        return float(node) == 100.0
+    if not isinstance(node, dict):
+        return False
+    if str(node.get("op") or "").lower() not in {"const", "number", "value"}:
+        return False
+    value = node.get("value")
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and float(value) == 100.0
+
+
+def _unwrap_percent_multiply(node: Any) -> Any:
+    """Страховка конвенции процентов: колонка таблицы должна отдавать ДОЛЮ —
+    фронт сам умножает её на 100 при показе. multiply(X, const 100) внутри
+    columns разворачивается в X (и повторно, если модель умножила дважды).
+    Скалярные формулы (корень не table) сюда не попадают — там ×100 легитимен.
+    """
+    if not isinstance(node, dict) or str(node.get("op") or "").lower() != "multiply":
+        return node
+    left, right = node.get("left"), node.get("right")
+    if _is_const_100(right) and isinstance(left, dict):
+        return _unwrap_percent_multiply(left)
+    if _is_const_100(left) and isinstance(right, dict):
+        return _unwrap_percent_multiply(right)
+    return node
 
 
 def _normalize_arithmetic_const(node: dict[str, Any]) -> dict[str, Any]:
