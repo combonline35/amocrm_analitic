@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import argparse
+import calendar
 import html
 import json
 import re
@@ -639,32 +640,158 @@ def _resolve_cf_enum_id(repo: Repository, field_id: int, value: Any) -> str:
     return str(row["enum_id"]) if row and row["enum_id"] is not None else raw
 
 
-def _condition_to_amo_filter(repo: Repository, condition: dict[str, Any]) -> list[str]:
+# Обратный маппинг к _parse_amo_filter_url / _amo_base_filter_field:
+# пресеты формулы -> date_preset amoCRM, базовые date-поля -> filter_date_switch.
+AMO_DATE_PRESETS = {
+    "this_month": "current_month",
+    "previous_month": "last_month",
+    "this_week": "current_week",
+    "previous_week": "last_week",
+}
+AMO_DATE_SWITCH = {
+    "created_at": "created",
+    "updated_at": "modified",
+    "closed_at": "closed",
+}
+AMO_MONTH_FIELDS = {
+    "created_month": "created_at",
+    "updated_month": "updated_at",
+    "closed_month": "closed_at",
+}
+
+
+def _month_bounds(value: Any) -> tuple[str, str] | None:
+    match = re.fullmatch(r"(\d{4})-(\d{2})", str(value or "").strip())
+    if not match:
+        return None
+    year, month = int(match.group(1)), int(match.group(2))
+    if not 1 <= month <= 12:
+        return None
+    last_day = calendar.monthrange(year, month)[1]
+    return f"{year:04d}-{month:02d}-01", f"{year:04d}-{month:02d}-{last_day:02d}"
+
+
+def _condition_to_amo_filter(repo: Repository, condition: dict[str, Any]) -> tuple[list[str], bool]:
+    """Переводит условие формулы в параметры amo-фильтра.
+
+    Возвращает (parts, ok). ok=False означает, что условие НЕ переводится в
+    amo-URL — вызывающий сам решает, валидна ли ссылка целиком (молча
+    пропускать нельзя: пустой список неотличим от «не смог»).
+    """
     field = str(condition.get("field") or "")
     op = str(condition.get("op") or condition.get("operator") or "").lower()
-    if not field.startswith("cf_"):
-        return []
-    try:
-        field_id = int(field.removeprefix("cf_").removeprefix("month_"))
-    except ValueError:
-        return []
-    if op in {"this_month", "current_month"}:
-        return [f"filter%5Bcf%5D%5B{field_id}%5D%5Bdate_preset%5D=current_month"]
-    if op in {"previous_month"}:
-        return [f"filter%5Bcf%5D%5B{field_id}%5D%5Bdate_preset%5D=last_month"]
-    if op in {"eq", "in"}:
-        values = condition.get("value")
-        if op == "eq":
-            values = [values]
-        if not isinstance(values, list):
-            return []
+    value = condition.get("value")
+
+    if field.startswith("cf_"):
+        try:
+            field_id = int(field.removeprefix("cf_").removeprefix("month_"))
+        except ValueError:
+            return [], False
+        if op in {"this_month", "current_month"}:
+            return [f"filter%5Bcf%5D%5B{field_id}%5D%5Bdate_preset%5D=current_month"], True
+        if op in {"previous_month"}:
+            return [f"filter%5Bcf%5D%5B{field_id}%5D%5Bdate_preset%5D=last_month"], True
+        if op in {"eq", "in"}:
+            values = value if op == "in" else [value]
+            if not isinstance(values, list):
+                return [], False
+            parts = []
+            for item in values:
+                enum_id = _resolve_cf_enum_id(repo, field_id, item)
+                if enum_id:
+                    parts.append(f"filter%5Bcf%5D%5B{field_id}%5D%5B%5D={quote(enum_id)}")
+            return parts, bool(parts)
+        return [], False
+
+    if field == "responsible_user_id" and op in {"eq", "in"}:
+        values = value if isinstance(value, list) else [value]
         parts = []
-        for value in values:
-            enum_id = _resolve_cf_enum_id(repo, field_id, value)
-            if enum_id:
-                parts.append(f"filter%5Bcf%5D%5B{field_id}%5D%5B%5D={quote(enum_id)}")
-        return parts
-    return []
+        for item in values:
+            raw = str(item or "").strip()
+            if not raw.isdigit():
+                return [], False
+            parts.append(f"filter%5Bmain_user%5D%5B%5D={raw}")
+        return parts, bool(parts)
+
+    if field == "status_id" and op in {"eq", "in"}:
+        values = value if isinstance(value, list) else [value]
+        _, status_index = _pipeline_status_index(repo)
+        parts = []
+        for item in values:
+            status_id = str(item or "").strip()
+            status = status_index.get(status_id)
+            if not status:
+                return [], False
+            parts.append(f"filter%5Bpipe%5D%5B{quote(status['pipeline_id'])}%5D%5B%5D={quote(status_id)}")
+        return parts, bool(parts)
+
+    if field == "pipeline_id" and op in {"eq", "in"}:
+        values = value if isinstance(value, list) else [value]
+        parts = []
+        for item in values:
+            pipeline_parts = _pipeline_status_filter_parts(repo, str(item or "").strip())
+            if not pipeline_parts:
+                return [], False
+            parts.extend(pipeline_parts)
+        return parts, bool(parts)
+
+    if field in AMO_DATE_SWITCH:
+        preset = AMO_DATE_PRESETS.get(op)
+        if preset:
+            return [
+                f"filter%5Bdate_preset%5D={preset}",
+                f"filter_date_switch={AMO_DATE_SWITCH[field]}",
+            ], True
+        if op in {"date_between", "between"} and isinstance(value, list) and len(value) == 2:
+            return [
+                f"filter%5B{field}%5D%5Bfrom%5D={quote(str(value[0]))}",
+                f"filter%5B{field}%5D%5Bto%5D={quote(str(value[1]))}",
+            ], True
+        if op == "gte" and value not in (None, ""):
+            return [f"filter%5B{field}%5D%5Bfrom%5D={quote(str(value))}"], True
+        if op == "lte" and value not in (None, ""):
+            return [f"filter%5B{field}%5D%5Bto%5D={quote(str(value))}"], True
+        return [], False
+
+    if field in AMO_MONTH_FIELDS:
+        date_field = AMO_MONTH_FIELDS[field]
+        preset = AMO_DATE_PRESETS.get(op)
+        if preset:
+            return [
+                f"filter%5Bdate_preset%5D={preset}",
+                f"filter_date_switch={AMO_DATE_SWITCH[date_field]}",
+            ], True
+        if op == "eq":
+            bounds = _month_bounds(value)
+            if bounds:
+                return [
+                    f"filter%5B{date_field}%5D%5Bfrom%5D={bounds[0]}",
+                    f"filter%5B{date_field}%5D%5Bto%5D={bounds[1]}",
+                ], True
+            return [], False
+        if op in {"date_between", "between"} and isinstance(value, list) and len(value) == 2:
+            start = _month_bounds(value[0])
+            end = _month_bounds(value[1])
+            if start and end:
+                return [
+                    f"filter%5B{date_field}%5D%5Bfrom%5D={start[0]}",
+                    f"filter%5B{date_field}%5D%5Bto%5D={end[1]}",
+                ], True
+        return [], False
+
+    if field == "price":
+        if op == "gte" and value not in (None, ""):
+            return [f"filter%5Bprice%5D%5Bfrom%5D={quote(str(value))}"], True
+        if op == "lte" and value not in (None, ""):
+            return [f"filter%5Bprice%5D%5Bto%5D={quote(str(value))}"], True
+        if op == "between" and isinstance(value, list) and len(value) == 2:
+            return [
+                f"filter%5Bprice%5D%5Bfrom%5D={quote(str(value[0]))}",
+                f"filter%5Bprice%5D%5Bto%5D={quote(str(value[1]))}",
+            ], True
+        return [], False
+
+    return [], False
 
 
 def _field_labels_for_formula(repo: Repository) -> dict[str, str]:
@@ -1067,13 +1194,18 @@ def _formula_amo_filter_url(
     for condition in node.get("where") or node.get("filters") or []:
         if not isinstance(condition, dict):
             continue
-        for part in _condition_to_amo_filter(repo, condition):
+        # drilldown исторически переводит только cf-условия — сохраняем это
+        # поведение, расширенный маппинг использует _formula_amo_filter_export.
+        if not str(condition.get("field") or "").startswith("cf_"):
+            continue
+        cond_parts, _mapped = _condition_to_amo_filter(repo, condition)
+        for part in cond_parts:
             if part not in seen:
                 seen.add(part)
                 parts.append(part)
     group_by = node.get("group_by")
     if isinstance(group_by, str) and group_by.startswith("cf_") and row_key:
-        part_conditions = _condition_to_amo_filter(repo, {"field": group_by, "op": "eq", "value": row_key})
+        part_conditions, _mapped = _condition_to_amo_filter(repo, {"field": group_by, "op": "eq", "value": row_key})
         field_prefix = f"filter%5Bcf%5D%5B{group_by.removeprefix('cf_')}%5D"
         parts = [part for part in parts if not part.startswith(field_prefix)]
         parts.extend(part for part in part_conditions if part not in parts)
@@ -1087,6 +1219,58 @@ def _formula_amo_filter_url(
     parts.append("useFilter=y")
     path = "/leads/list/" if status_parts else _source_pipeline_path(repo, settings, source_id)
     return f"{settings.account_base_url}{path}?{'&'.join(parts)}"
+
+
+def _formula_amo_filter_export(repo: Repository, settings: Any, formula: Any) -> dict[str, Any]:
+    """Собирает amo-URL для формулы целиком (для блока «Расшифровка»).
+
+    Контракт «всё или ничего»: unmapped перечисляет условия, которые не
+    переводятся в amo-фильтр; при непустом unmapped фронт ссылку не показывает.
+    """
+    if not isinstance(formula, dict) or not settings.account_base_url:
+        return {"url": "", "unmapped": []}
+    op = str(formula.get("op") or "").lower()
+    if op not in {"count", "sum", "avg", "min", "max"}:
+        # Таблицу/арифметику одной ссылкой не представить.
+        return {"url": "", "unmapped": ["составная формула"]}
+    entity = str(formula.get("from") or formula.get("entity") or "leads")
+    if entity != "leads":
+        return {"url": "", "unmapped": [f"сущность {entity}"]}
+    source_id = int(formula.get("source_id") or 0) or None
+    parts: list[str] = []
+    seen: set[str] = set()
+    unmapped: list[str] = []
+    date_preset_used = False
+    for condition in formula.get("where") or formula.get("filters") or []:
+        if not isinstance(condition, dict):
+            continue
+        label = f"{condition.get('field')} {condition.get('op')}".strip()
+        cond_parts, mapped = _condition_to_amo_filter(repo, condition)
+        if not mapped or not cond_parts:
+            unmapped.append(label)
+            continue
+        if any(part.startswith("filter%5Bdate_preset%5D") for part in cond_parts):
+            # У amo один глобальный date_preset на URL — второй не влезет.
+            if date_preset_used:
+                unmapped.append(label)
+                continue
+            date_preset_used = True
+        for part in cond_parts:
+            if part not in seen:
+                seen.add(part)
+                parts.append(part)
+    pipeline_ids = _source_pipeline_ids(repo, settings, source_id)
+    if len(pipeline_ids) > 1:
+        for pipeline_id in pipeline_ids:
+            for part in _pipeline_status_filter_parts(repo, pipeline_id):
+                if part not in seen:
+                    seen.add(part)
+                    parts.append(part)
+    if not parts and not pipeline_ids:
+        return {"url": "", "unmapped": unmapped}
+    parts.append("useFilter=y")
+    path = _source_pipeline_path(repo, settings, source_id) if len(pipeline_ids) <= 1 else "/leads/list/"
+    return {"url": f"{settings.account_base_url}{path}?{'&'.join(parts)}", "unmapped": unmapped}
 
 
 def _load_drilldown_payload(settings: Any, widget_id: str, row_key: str, column: str) -> dict[str, Any]:
@@ -5332,6 +5516,7 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
                 engine = FormulaEngine(repo)
                 result = engine.evaluate(formula)
                 diagnostics = engine.diagnose(formula)
+                diagnostics["amo_filter"] = _formula_amo_filter_export(repo, settings, formula)
                 self._send_json({"ok": True, "result": result, "diagnostics": diagnostics})
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, status=400)
@@ -5379,6 +5564,7 @@ class AmoCRMServiceHandler(BaseHTTPRequestHandler):
                 engine = FormulaEngine(repo)
                 result = engine.evaluate(formula)
                 diagnostics = engine.diagnose(formula)
+                diagnostics["amo_filter"] = _formula_amo_filter_export(repo, settings, formula)
                 print(
                     "AI formula draft evaluated "
                     f"account={settings.user_key}/{settings.account_key} "

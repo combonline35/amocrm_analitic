@@ -3742,6 +3742,14 @@ def render_dashboard(
         const renderFormulaExplanationHtml = (result, diagnostics) => {{
           const items = Array.isArray(diagnostics?.items) ? diagnostics.items : [];
           if (!items.length) return '';
+          const amoFilter = diagnostics?.amo_filter || null;
+          const amoUnmapped = Array.isArray(amoFilter?.unmapped) ? amoFilter.unmapped : [];
+          let amoLinkHtml = '';
+          if (amoFilter?.url && !amoUnmapped.length) {{
+            amoLinkHtml = `<div class="formula-explanation-amo" style="margin: 4px 0 8px;"><a href="${{safeText(amoFilter.url)}}" target="_blank" rel="noopener">Открыть в amoCRM</a></div>`;
+          }} else if (amoUnmapped.length) {{
+            amoLinkHtml = `<div class="formula-explanation-amo" style="margin: 4px 0 8px; color: #8a94a6; font-size: 12px;">Фильтр не переводится в amoCRM полностью, ссылка скрыта.</div>`;
+          }}
           const sections = items.map((item, itemIndex) => {{
             const stages = Array.isArray(item.stages) ? item.stages : [];
             if (!stages.length) return '';
@@ -3775,7 +3783,7 @@ def render_dashboard(
               </details>
             `;
           }}).join('');
-          return `<div class="formula-explanation-list">${{sections}}</div>`;
+          return `<div class="formula-explanation-list">${{amoLinkHtml}}${{sections}}</div>`;
         }};
         const renderFormulaDiagnosticsHtml = (diagnostics) => {{
           const items = Array.isArray(diagnostics?.items) ? diagnostics.items : [];
