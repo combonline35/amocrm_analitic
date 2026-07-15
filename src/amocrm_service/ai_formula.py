@@ -253,9 +253,23 @@ def _simple_count_draft(
         or "дата создания" in user_prompt.casefold()
     )
     wants_created_group = mentions_created and ("по" in tokens or "дате" in tokens or "месяцам" in tokens)
-    has_explicit_field_conditions = bool(
-        tokens & {"где", "поле", "заполнено", "заполнен", "значением", "равно", "сгруппируй", "группируй"}
-    )
+    # Явное условие по полю ("поле X", "у которых X = Y", "X заполнено 1",
+    # "равно", "стоит", "содержит", "где X это Y") — заготовка не умеет
+    # фильтровать по произвольным полям, поэтому всегда уступает модели,
+    # независимо от того, поддерживает ли она остальную форму запроса.
+    has_field_condition = bool(
+        tokens & {
+            "где", "поле", "поля", "полю", "полем",
+            "которых", "которые", "которым",
+            "заполнено", "заполнен", "заполнена", "заполнены",
+            "значением", "значение",
+            "равно", "равен", "равна", "равным",
+            "стоит", "содержит",
+        }
+    ) or "=" in user_prompt
+    if has_field_condition:
+        return None
+    has_group_request = bool(tokens & {"сгруппируй", "группируй"})
     has_stage_or_reason_conditions = (
         has_prefix("этап")
         or has_prefix("статус")
@@ -275,7 +289,7 @@ def _simple_count_draft(
     if (
         has_stage_or_reason_conditions
         or (mentions_other_business_date and not mentions_created)
-        or (has_explicit_field_conditions and not supported_simple_shape)
+        or (has_group_request and not supported_simple_shape)
         or (has_named_field_reference and not (wants_ad_group or wants_responsible_group))
         or (has_table_request and not (wants_ad_group or wants_responsible_group or wants_created_group))
     ):

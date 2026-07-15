@@ -96,6 +96,27 @@ def test_simple_count_still_handles_current_month():
     assert any(c.get("field") == "created_at" and c.get("op") == "this_month" for c in where)
 
 
+def test_simple_count_defers_when_field_condition():
+    # Явное условие по полю ("поле ... заполнено 1") заготовка не умеет —
+    # уступает модели, даже если остальная форма запроса ей знакома.
+    assert _draft(
+        "Посчитай количество сделок созданных в текущий месяц у которых поле Целевой заполнено 1"
+    ) is None
+
+
+def test_simple_count_defers_field_equals():
+    assert _draft("сколько сделок где Статус = 1") is None
+
+
+def test_simple_count_still_handles_plain():
+    # Регресс-защита: без условий по полю заготовка отвечает сама.
+    draft = _draft("сколько сделок в текущем месяце")
+    assert draft is not None
+    assert draft["provider"] == "rules"
+    where = draft["formula"].get("where") or []
+    assert any(c.get("field") == "created_at" and c.get("op") == "this_month" for c in where)
+
+
 def test_simple_count_still_handles_previous_month():
     draft = _draft("сколько сделок за прошлый месяц")
     assert draft is not None
