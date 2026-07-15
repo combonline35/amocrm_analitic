@@ -108,6 +108,23 @@ def test_simple_count_defers_field_equals():
     assert _draft("сколько сделок где Статус = 1") is None
 
 
+def test_simple_count_defers_manager_mention():
+    # Фильтр по конкретному менеджеру заготовка не умеет — уступает модели,
+    # у которой есть справочник users.
+    assert _draft("сколько сделок за текущий месяц у менеджера Сырцов") is None
+
+
+def test_simple_count_defers_responsible():
+    assert _draft("сделки по ответственному Иванову") is None
+
+
+def test_simple_count_still_handles_responsible_group():
+    # Разрез "по ответственным" — группировка, остаётся на заготовке.
+    draft = _draft("сколько сделок по ответственным")
+    assert draft is not None
+    assert draft["formula"].get("group_by") == "responsible_user_id"
+
+
 def test_simple_count_still_handles_plain():
     # Регресс-защита: без условий по полю заготовка отвечает сама.
     draft = _draft("сколько сделок в текущем месяце")
