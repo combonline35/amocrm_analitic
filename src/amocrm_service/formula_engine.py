@@ -76,6 +76,15 @@ OPS = {
 EMPTY_OPS = {"empty", "is_empty"}
 NOT_EMPTY_OPS = {"not_empty", "is_not_empty", "filled"}
 ARITHMETIC_OPS = {"add", "subtract", "multiply", "divide"}
+# JSON-пути raw_entities, по которым в db.py построены expression-индексы
+# вида CAST(json_extract(payload_json, '<path>') AS INTEGER).
+INDEXED_INT_JSON_PATHS = {
+    "$.pipeline_id",
+    "$.status_id",
+    "$.responsible_user_id",
+    "$.created_at",
+    "$.updated_at",
+}
 BUSINESS_TZ = ZoneInfo("Europe/Moscow")
 SQL_BUSINESS_TZ_MODIFIER = "+3 hours"
 
@@ -505,12 +514,14 @@ class FormulaEngine:
             # means "no constraint on that dimension" (matches source config).
             source_pipeline_ids, source_status_ids = self._source_filter_ids(source_id)
             if source_pipeline_ids:
-                pipeline_sql = self._field_sql(entity_type, fields["pipeline_id"])
+                # numeric=True даёт CAST(... AS INTEGER) — точное совпадение с
+                # expression-индексом, иначе фильтр источника сканирует весь тип.
+                pipeline_sql = self._field_sql(entity_type, fields["pipeline_id"], numeric=True)
                 placeholders = ",".join("?" for _ in source_pipeline_ids)
                 where_parts.append(f"{pipeline_sql} IN ({placeholders})")
                 params.extend(sorted(source_pipeline_ids))
             if source_status_ids:
-                status_sql = self._field_sql(entity_type, fields["status_id"])
+                status_sql = self._field_sql(entity_type, fields["status_id"], numeric=True)
                 placeholders = ",".join("?" for _ in source_status_ids)
                 where_parts.append(f"{status_sql} IN ({placeholders})")
                 params.extend(sorted(source_status_ids))
@@ -799,7 +810,13 @@ class FormulaEngine:
             base = f"json_extract(raw_entities.payload_json, '{path}')"
             if month:
                 return f"strftime('%Y-%m', CAST({base} AS INTEGER), 'unixepoch', '{SQL_BUSINESS_TZ_MODIFIER}')"
-            return f"CAST({base} AS REAL)" if numeric else base
+            if numeric:
+                # Для полей с expression-индексом выражение должно совпадать с
+                # DDL индекса (CAST ... AS INTEGER) — иначе SQLite не может его
+                # использовать и перебирает все строки entity_type.
+                cast_type = "INTEGER" if path in INDEXED_INT_JSON_PATHS else "REAL"
+                return f"CAST({base} AS {cast_type})"
+            return base
         if path.startswith("cf_month:"):
             field_id = int(path.removeprefix("cf_month:"))
             raw_value_sql = self._custom_field_value_sql(entity_type, field_id, numeric=True)
@@ -1154,7 +1171,13 @@ class FormulaEngine:
 
     def _coerce_value(self, value: Any, value_type: str) -> Any:
         if value_type == "number":
-            return self._to_number(value)
+            number = self._to_number(value)
+            # Целые числа отдаём как int: expression-индексы построены по
+            # CAST(... AS INTEGER), целочисленный параметр сравнивается с ними
+            # напрямую. Дробные (цены) остаются float — семантика не меняется.
+            if isinstance(number, float) and number.is_integer():
+                return int(number)
+            return number
         if value_type == "boolean":
             return self._to_boolean(value)
         if value_type == "month":

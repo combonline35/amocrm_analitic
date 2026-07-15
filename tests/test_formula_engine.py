@@ -382,3 +382,35 @@ def test_table_no_source_counts_all(tmp_path):
     rows = {row["key"]: row for row in result["rows"]}
     # Без source_id где-либо — честный весь хаб.
     assert rows["11"]["Все"] == 3
+
+
+def test_source_filter_uses_index(tmp_path):
+    repo = _repo(tmp_path)
+    _insert_raw(repo, "leads", "1", {"id": 1, "pipeline_id": 100, "status_id": 10})
+    _insert_raw(repo, "leads", "2", {"id": 2, "pipeline_id": 200, "status_id": 10})
+    _insert_source(repo, 7, [100])
+
+    captured: list[tuple[str, tuple]] = []
+    real_conn = repo.conn
+
+    class _Tracer:
+        def execute(self, sql, params=()):
+            captured.append((sql, params))
+            return real_conn.execute(sql, params)
+
+        def __getattr__(self, name):
+            return getattr(real_conn, name)
+
+    repo.conn = _Tracer()
+    result = FormulaEngine(repo).evaluate({"op": "count", "from": "leads", "source_id": 7})
+    repo.conn = real_conn
+
+    assert result["value"] == 1
+    sql, params = next(item for item in captured if "$.pipeline_id" in item[0] and "COUNT" in item[0])
+    plan = " | ".join(
+        str(row["detail"]) for row in real_conn.execute("EXPLAIN QUERY PLAN " + sql, params).fetchall()
+    )
+    # Фильтр источника должен попадать в expression-индекс по обеим колонкам,
+    # а не перебирать все строки entity_type.
+    assert "idx_raw_entities_type_pipeline" in plan
+    assert "entity_type=? AND" in plan
