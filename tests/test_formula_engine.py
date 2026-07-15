@@ -255,3 +255,76 @@ def test_formula_engine_builds_table_from_formula_columns(tmp_path):
     assert rows["11"]["Назначено"] == 2
     assert rows["11"]["Договора"] == 1
     assert rows["11"]["Конверсия"] == 0.5
+
+
+def _insert_source(repo: Repository, source_id: int, pipeline_ids: list[int]) -> None:
+    repo.conn.execute(
+        """
+        INSERT INTO sync_sources(id, account_key, name, entity_types_json, pipeline_ids_json, status_ids_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (source_id, "test", f"Источник {source_id}", '["leads"]', json.dumps(pipeline_ids), "[]",
+         "2026-07-01T00:00:00+00:00", "2026-07-01T00:00:00+00:00"),
+    )
+    repo.conn.commit()
+
+
+def test_table_inherits_root_source_id(tmp_path):
+    repo = _repo(tmp_path)
+    _insert_source(repo, 5, [100])
+    _insert_raw(repo, "leads", "1", {"id": 1, "pipeline_id": 100, "responsible_user_id": 11})
+    _insert_raw(repo, "leads", "2", {"id": 2, "pipeline_id": 100, "responsible_user_id": 11})
+    _insert_raw(repo, "leads", "3", {"id": 3, "pipeline_id": 200, "responsible_user_id": 11})
+
+    result = FormulaEngine(repo).evaluate({
+        "op": "table",
+        "source_id": 5,
+        "columns": {
+            "Все": {"op": "count", "from": "leads", "group_by": "responsible_user_id"},
+        },
+    })
+
+    rows = {row["key"]: row for row in result["rows"]}
+    # Сделка из воронки 200 вне источника 5 — в счёт не попала.
+    assert rows["11"]["Все"] == 2
+
+
+def test_table_column_source_overrides_root(tmp_path):
+    repo = _repo(tmp_path)
+    _insert_source(repo, 5, [100])
+    _insert_source(repo, 6, [200])
+    _insert_raw(repo, "leads", "1", {"id": 1, "pipeline_id": 100, "responsible_user_id": 11})
+    _insert_raw(repo, "leads", "2", {"id": 2, "pipeline_id": 100, "responsible_user_id": 11})
+    _insert_raw(repo, "leads", "3", {"id": 3, "pipeline_id": 200, "responsible_user_id": 11})
+
+    result = FormulaEngine(repo).evaluate({
+        "op": "table",
+        "source_id": 5,
+        "columns": {
+            "Корневой": {"op": "count", "from": "leads", "group_by": "responsible_user_id"},
+            "Свой": {"op": "count", "from": "leads", "group_by": "responsible_user_id", "source_id": 6},
+        },
+    })
+
+    rows = {row["key"]: row for row in result["rows"]}
+    assert rows["11"]["Корневой"] == 2
+    # Колонка со своим source_id=6 не перебита корневым 5.
+    assert rows["11"]["Свой"] == 1
+
+
+def test_table_no_source_counts_all(tmp_path):
+    repo = _repo(tmp_path)
+    _insert_raw(repo, "leads", "1", {"id": 1, "pipeline_id": 100, "responsible_user_id": 11})
+    _insert_raw(repo, "leads", "2", {"id": 2, "pipeline_id": 100, "responsible_user_id": 11})
+    _insert_raw(repo, "leads", "3", {"id": 3, "pipeline_id": 200, "responsible_user_id": 11})
+
+    result = FormulaEngine(repo).evaluate({
+        "op": "table",
+        "columns": {
+            "Все": {"op": "count", "from": "leads", "group_by": "responsible_user_id"},
+        },
+    })
+
+    rows = {row["key"]: row for row in result["rows"]}
+    # Без source_id где-либо — честный весь хаб.
+    assert rows["11"]["Все"] == 3
