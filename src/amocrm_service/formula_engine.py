@@ -1065,9 +1065,20 @@ class FormulaEngine:
         raise ValueError(f"Unsupported math operands: {left.kind}, {right.kind}")
 
     def _apply_series_math(self, op: str, left: FormulaValue, right: FormulaValue) -> FormulaValue:
-        left_map = self._series_map(left)
-        right_map = self._series_map(right)
-        keys = sorted(set(left_map) | set(right_map))
+        if left.kind == "series" and right.kind == "series":
+            left_map = self._series_map(left)
+            right_map = self._series_map(right)
+            keys = sorted(set(left_map) | set(right_map))
+        elif left.kind == "series":
+            # Скаляр (например const 100 в "×100") броадкастится на ключи
+            # серии — синтетическая строка "__scalar__" в результат не попадает.
+            left_map = self._series_map(left)
+            keys = list(left_map)
+            right_map = {key: {"label": "", "value": right.value or 0} for key in keys}
+        else:
+            right_map = self._series_map(right)
+            keys = list(right_map)
+            left_map = {key: {"label": "", "value": left.value or 0} for key in keys}
         rows = []
         for key in keys:
             left_item = left_map.get(key, {"label": key, "value": left.value or 0})
@@ -1078,13 +1089,22 @@ class FormulaEngine:
                 "value": self._math(op, left_item.get("value") or 0, right_item.get("value") or 0),
                 "left": left_item.get("value") or 0,
                 "right": right_item.get("value") or 0,
-                "entity_type": left_item.get("entity_type") or right_item.get("entity_type") or left.meta.get("entity") or right.meta.get("entity"),
+                "entity_type": left_item.get("entity_type") or right_item.get("entity_type") or (left.meta or {}).get("entity") or (right.meta or {}).get("entity"),
                 "entity_ids": self._merge_trace_ids(left_item.get("entity_ids"), right_item.get("entity_ids")),
                 "trace_total": (left_item.get("trace_total") or len(left_item.get("entity_ids") or []))
                 + (right_item.get("trace_total") or len(right_item.get("entity_ids") or [])),
                 "trace_truncated": bool(left_item.get("trace_truncated") or right_item.get("trace_truncated")),
             })
-        return FormulaValue(kind="series", rows=rows, meta={"op": op})
+        if left.kind == "series" and right.kind == "series":
+            return FormulaValue(kind="series", rows=rows, meta={"op": op})
+        # meta серии (entity/группировка) сохраняется, чтобы таблица и
+        # drilldown не теряли подписи после умножения на константу.
+        series_meta = (left.meta if left.kind == "series" else right.meta) or {}
+        meta: dict[str, Any] = {"op": op}
+        for meta_key in ("entity", "group_by", "group_fields"):
+            if series_meta.get(meta_key) is not None:
+                meta[meta_key] = series_meta[meta_key]
+        return FormulaValue(kind="series", rows=rows, meta=meta)
 
     def _merge_trace_ids(self, left_ids: Any, right_ids: Any, limit: int = 1000) -> list[str]:
         merged: list[str] = []
