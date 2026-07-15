@@ -138,8 +138,14 @@ Critical business rule: for measurement-conversion tables by "Замерщик" 
 - Агрегация: {"op":"count","from":"leads","source_id":1,"where":[...]}.
 - Поля фильтра: field, op, value. Допустимые op: eq, neq, like, in, not_in, gt, gte, lt, lte, between, date_between, this_month, previous_month, this_week, previous_week, last_days, empty, not_empty.
 - Если у поля в словаре есть список values (это select-поле) — фильтруй по нему op="eq" (одно значение) или op="in" (несколько), а value бери ТОЧНО из списка values этого поля. Не выдумывай значения, которых нет в values.
-- Если пользователь называет значение поля (например "поле X = Y", "где X заполнено значением Y") — найди поле с подходящим label и подставь value из его values, максимально близкое к названному.
-- Если пользователь говорит "поле указано", "заполнено", "есть замерщик" — используй op="not_empty" и value=null. Если "не указано" — op="empty".
+- Пользователь может назвать условие по полю МНОГИМИ способами — все они означают фильтр op="eq" по значению из values поля: «поле X = Y», «поле X равно Y», «X заполнено Y», «X заполнен значением Y», «X содержит Y», «X стоит Y», «где X это Y», «с X равным Y», «X = единица». Во ВСЕХ этих случаях ставь условие {"field":"cf_<id>","op":"eq","value":"<значение из values>"} — найди поле с подходящим label и подставь value из его values, максимально близкое к названному.
+- Если значение названо словом, сопоставь его со списком values поля: «единица»/«один» -> "1", «ноль» -> "0", «да» -> "1", «нет» -> "0" (только если такое значение есть в values этого поля).
+- Название поля в запросе может стоять в другом падеже («целевым» вместо «Целевой», «замерщиком» вместо «Замерщик») — сопоставляй поле по основе слова, а не по точному совпадению.
+- Примеры (иллюстрация формата, cf_<id> всегда бери из словаря):
+  «сделки где Целевой заполнено 1» при поле «Целевой» (values ["1","0"]) -> where: [{"field":"cf_<id>","op":"eq","value":"1"}].
+  «сколько сделок где Целевой = единица» при том же поле -> where: [{"field":"cf_<id>","op":"eq","value":"1"}].
+  «сделки с целевым равным 1» -> то же поле «Целевой» -> where: [{"field":"cf_<id>","op":"eq","value":"1"}].
+- Если пользователь говорит "поле указано", "заполнено" БЕЗ конкретного значения ("есть замерщик", "Целевой заполнен") — используй op="not_empty" и value=null. Если "не указано" — op="empty". Но если рядом названо значение («заполнено 1») — это op="eq" по значению, не not_empty.
 - Для даты можно использовать this_month/previous_month/this_week/previous_week/last_days/date_between.
 - Для месяца можно использовать this_month/previous_month/date_between/eq.
 - Не придумывай cf_month_* сам. Используй только month-поля, которые есть в словаре. Если есть похожее текстовое и date/month поле, для периода выбирай date/month поле.
@@ -1481,6 +1487,15 @@ def _keep_dictionary_field(entity_value: str, field: dict[str, Any], prompt_toke
         prompt_long = {token for token in prompt_tokens if len(token) >= 4}
         for label_token in label_tokens:
             if any(label_token in prompt_token or prompt_token in label_token for prompt_token in prompt_long):
+                return True
+        # морфология: русские падежи меняют окончание, основа остаётся —
+        # общий префикс >= 5 символов считаем совпадением ("целевой"/"целевым"
+        # -> "целев"). Только для select-полей, базовый гейт не ослабляем.
+        for label_token in label_tokens:
+            if len(label_token) < 5:
+                continue
+            prefix = label_token[:5]
+            if any(prompt_token.startswith(prefix) for prompt_token in prompt_long):
                 return True
     if entity_value == "leads" and "замер" in prompt_tokens and any("замер" in token for token in field_tokens):
         return True
