@@ -3268,7 +3268,7 @@ def render_dashboard(
           if (!Number.isFinite(number)) return '0' + suffix;
           return new Intl.NumberFormat('ru-RU', {{ maximumFractionDigits: 2 }}).format(number) + suffix;
         }};
-        const isPercentColumn = (column) => {{
+        const isPercentColumnName = (column) => {{
           const normalized = String(column || '').trim().toLowerCase();
           return normalized.includes('%')
             || normalized.includes('процент')
@@ -3277,13 +3277,21 @@ def render_dashboard(
             || normalized === 'св'
             || normalized.startsWith('св ');
         }};
-        const formatFormulaTableValue = (column, value) => {{
+        const isPercentColumn = (column, ratioColumns = null) => {{
+          // Семантический признак с бэка (meta.ratio_columns: колонки-divide).
+          // Если бэк его отдал — верим только ему: AI-названия («Cv в целевые»)
+          // по словам не угадываются. Эвристика по названию остаётся только
+          // для старых кэшированных результатов без признака.
+          if (Array.isArray(ratioColumns)) return ratioColumns.includes(column);
+          return isPercentColumnName(column);
+        }};
+        const formatFormulaTableValue = (column, value, ratioColumns = null) => {{
           const number = Number(value || 0);
-          if (isPercentColumn(column)) return formatNumber(number * 100, '%');
+          if (isPercentColumn(column, ratioColumns)) return formatNumber(number * 100, '%');
           return formatNumber(value);
         }};
-        const formulaPercentToneClass = (column, value) => {{
-          if (!isPercentColumn(column)) return '';
+        const formulaPercentToneClass = (column, value, ratioColumns = null) => {{
+          if (!isPercentColumn(column, ratioColumns)) return '';
           const number = Number(value || 0);
           if (!Number.isFinite(number) || number <= 0) return 'percent-zero';
           if (number >= 0.65) return 'percent-good';
@@ -3291,9 +3299,9 @@ def render_dashboard(
           if (number >= 0.3) return 'percent-warn';
           return 'percent-bad';
         }};
-        const formulaCellClass = (column, value) => {{
-          if (isPercentColumn(column)) {{
-            return ['formula-cell-percent', formulaPercentToneClass(column, value)].filter(Boolean).join(' ');
+        const formulaCellClass = (column, value, ratioColumns = null) => {{
+          if (isPercentColumn(column, ratioColumns)) {{
+            return ['formula-cell-percent', formulaPercentToneClass(column, value, ratioColumns)].filter(Boolean).join(' ');
           }}
           const number = Number(value);
           return Number.isFinite(number) ? 'formula-cell-number' : '';
@@ -4187,6 +4195,7 @@ def render_dashboard(
             const widthStyle = width ? ` class="formula-col-fixed" style="width: ${{width}}px; max-width: ${{width}}px;"` : '';
             return `<th title="${{safeText(original)}}"${{widthStyle}}><span class="formula-col-title">${{safeText(columnTitles[column] || original)}}</span></th>`;
           }};
+          const ratioColumns = Array.isArray(result.meta?.ratio_columns) ? result.meta.ratio_columns : null;
           // table-layout: fixed включается только при заданных ширинах — иначе
           // auto-раскладка игнорирует width на th и раздаёт остаток по контенту.
           const hasFixedColumns = Object.keys(columnWidths).length > 0;
@@ -4216,7 +4225,7 @@ def render_dashboard(
                 <tbody>${{prepared.rows.map((row) => `
                   <tr class="${{formulaRowClass(row)}}">
                     <td class="formula-row-label" title="${{safeText(row.label ?? row.key ?? 'Итого')}}">${{safeText(row.label ?? row.key ?? 'Итого')}}</td>
-                    ${{prepared.columns.map((column) => renderDrilldownCell(widgetId, row, column, formatFormulaTableValue(column, row[column] ?? 0), formulaCellClass(column, row[column] ?? 0))).join('')}}
+                    ${{prepared.columns.map((column) => renderDrilldownCell(widgetId, row, column, formatFormulaTableValue(column, row[column] ?? 0, ratioColumns), formulaCellClass(column, row[column] ?? 0, ratioColumns))).join('')}}
                   </tr>
                 `).join('')}}</tbody>
               </table>

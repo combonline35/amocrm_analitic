@@ -418,12 +418,15 @@ class FormulaEngine:
             raise ValueError("table.columns must be a non-empty object")
         root_source_id = self._optional_int(node.get("source_id"))
         columns = []
+        ratio_columns = []
         row_index: dict[str, dict[str, Any]] = {}
         scalar_index = 0
         for name, child in raw_columns.items():
             column_name = str(name)
             columns.append(column_name)
             value = self._eval_node(self._inherit_source_id(child, root_source_id), scope)
+            if self._is_ratio_column(child, value):
+                ratio_columns.append(column_name)
             if value.kind == "series":
                 for item in value.rows or []:
                     key = str(item.get("key") or "")
@@ -461,7 +464,20 @@ class FormulaEngine:
         for row in rows:
             for column in columns:
                 row.setdefault(column, 0)
-        return FormulaValue(kind="table", rows=rows, meta={"columns": columns})
+        return FormulaValue(kind="table", rows=rows, meta={"columns": columns, "ratio_columns": ratio_columns})
+
+    def _is_ratio_column(self, node: Any, value: FormulaValue) -> bool:
+        """Колонка-доля (divide) — семантический признак для фронта.
+
+        По конвенции DSL процентная колонка таблицы возвращает ДОЛЮ (0.66),
+        а фронт умножает её на 100 при показе. Раньше фронт угадывал такие
+        колонки по названию («%», «конверсия»...) — короткие AI-названия
+        («Cv в целевые») ломали угадывание. Признак: корень формулы колонки —
+        divide, либо divide в meta результата (divide внутри let).
+        """
+        if isinstance(node, dict) and str(node.get("op") or "").lower() == "divide":
+            return True
+        return bool(value.meta and str(value.meta.get("op") or "").lower() == "divide")
 
     def _inherit_source_id(self, node: Any, source_id: int | None) -> Any:
         """Наследует source_id table-узла в колонки, где он не задан.
