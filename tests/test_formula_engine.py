@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from amocrm_service.db import connect, init_db
 from amocrm_service.formula_engine import FormulaDictionaryService, FormulaEngine
 from amocrm_service.repository import Repository
@@ -414,3 +416,51 @@ def test_source_filter_uses_index(tmp_path):
     # а не перебирать все строки entity_type.
     assert "idx_raw_entities_type_pipeline" in plan
     assert "entity_type=? AND" in plan
+
+
+def _insert_cf_date_leads(repo: Repository) -> None:
+    now = datetime.now(timezone.utc)
+    current_ts = int(now.replace(day=5, hour=12, minute=0, second=0, microsecond=0).timestamp())
+    old_ts = int(now.replace(year=now.year - 1, day=5, hour=12, minute=0, second=0, microsecond=0).timestamp())
+    _insert_raw(repo, "lead_custom_fields", "3003", {"id": 3003, "name": "Дата договора", "type": "date"}, "Дата договора")
+    _insert_raw(repo, "leads", "1", {"id": 1, "custom_fields_values": [{"field_id": 3003, "field_name": "Дата договора", "values": [{"value": current_ts}]}]})
+    _insert_raw(repo, "leads", "2", {"id": 2, "custom_fields_values": [{"field_id": 3003, "field_name": "Дата договора", "values": [{"value": old_ts}]}]})
+    repo.rebuild_hub_indexes(["leads"])
+
+
+def test_temporal_op_ignores_wrong_value_type(tmp_path):
+    # Модель может прислать value_type "text" для date-поля: временная операция
+    # должна брать тип из метаданных, а не отклонять фильтр.
+    repo = _repo(tmp_path)
+    _insert_cf_date_leads(repo)
+    engine = FormulaEngine(repo)
+
+    wrong = engine.evaluate({
+        "op": "count", "from": "leads",
+        "where": [{"field": "cf_3003", "op": "this_month", "value": None, "value_type": "text"}],
+    })
+    right = engine.evaluate({
+        "op": "count", "from": "leads",
+        "where": [{"field": "cf_3003", "op": "this_month", "value": None, "value_type": "date"}],
+    })
+
+    assert wrong["value"] == 1
+    assert wrong["value"] == right["value"]
+
+
+def test_temporal_op_on_non_date_field_still_errors(tmp_path):
+    # select-поле без date-двойника: честная ошибка остаётся.
+    repo = _repo(tmp_path)
+    _insert_raw(
+        repo, "lead_custom_fields", "3005",
+        {"id": 3005, "name": "Т_замер назначен", "type": "select", "enums": [{"value": "1"}, {"value": "0"}]},
+        "Т_замер назначен",
+    )
+    _insert_raw(repo, "leads", "1", {"id": 1, "custom_fields_values": [{"field_id": 3005, "field_name": "Т_замер назначен", "values": [{"value": "1"}]}]})
+    repo.rebuild_hub_indexes(["leads"])
+
+    with pytest.raises(ValueError, match="date or month"):
+        FormulaEngine(repo).evaluate({
+            "op": "count", "from": "leads",
+            "where": [{"field": "cf_3005", "op": "this_month", "value": None}],
+        })
