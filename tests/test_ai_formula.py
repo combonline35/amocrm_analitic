@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
 from amocrm_service.ai_formula import (
+    AiFormulaError,
     _clean_formula,
     _compact_dictionary,
     _inherit_table_base_conditions,
+    _repair_group_fields,
     _simple_count_draft,
 )
 
@@ -44,6 +48,20 @@ def test_compact_dictionary_limits_enum():
     fields = compact["entities"][0]["fields"]
     assert len(fields[0]["values"]) == 20
     assert fields[0]["values"] == enums[:20]
+
+
+def test_compact_dictionary_keeps_groupable_by_morphology():
+    # «топ-5 источников заявок» должен оставить в словаре groupable-поле
+    # «Источник заявки» — падежи матчатся по префиксу основы.
+    field = {
+        "value": "cf_298209",
+        "label": "Источник заявки",
+        "type": "text",
+        "groupable": True,
+    }
+    compact = _compact_dictionary(_dict_with_field(field), user_prompt="топ-5 источников заявок")
+    fields = compact["entities"][0]["fields"]
+    assert any(item["value"] == "cf_298209" for item in fields)
 
 
 def test_non_select_no_values():
@@ -256,3 +274,57 @@ def test_scalar_percent_keeps_multiply():
     assert cleaned["op"] == "multiply"
     assert cleaned["right"] == {"op": "const", "value": 100}
     assert cleaned["left"]["op"] == "divide"
+
+
+GROUP_DICTIONARY = {
+    "entities": [
+        {
+            "value": "leads",
+            "label": "Сделки",
+            "count": 100,
+            "fields": [
+                {"value": "cf_298209", "label": "Источник", "type": "text", "groupable": True},
+                {"value": "responsible_user_id", "label": "Ответственный", "type": "user", "groupable": True},
+                {"value": "created_month", "label": "Месяц создания", "type": "month", "groupable": True},
+            ],
+        }
+    ],
+    "operators": {},
+}
+
+
+def test_group_by_repair_by_label():
+    formula = {"op": "count", "from": "leads", "group_by": "cf_источник"}
+    repaired = _repair_group_fields(formula, GROUP_DICTIONARY)
+    assert repaired["group_by"] == "cf_298209"
+
+
+def test_group_by_repair_by_label_morphology():
+    # Падежная форма ("источникам") тоже должна находить поле «Источник».
+    formula = {"op": "count", "from": "leads", "group_by": "cf_источникам"}
+    repaired = _repair_group_fields(formula, GROUP_DICTIONARY)
+    assert repaired["group_by"] == "cf_298209"
+
+
+def test_group_by_repair_keeps_real_fields():
+    formula = {"op": "count", "from": "leads", "group_by": ["cf_298209", "created_month"]}
+    repaired = _repair_group_fields(formula, GROUP_DICTIONARY)
+    assert repaired["group_by"] == ["cf_298209", "created_month"]
+
+
+def test_group_by_repair_inside_table_columns():
+    formula = {
+        "op": "table",
+        "columns": {
+            "Заявки": {"op": "count", "from": "leads", "group_by": "cf_источник"},
+        },
+    }
+    repaired = _repair_group_fields(formula, GROUP_DICTIONARY)
+    assert repaired["columns"]["Заявки"]["group_by"] == "cf_298209"
+
+
+def test_group_by_unknown_gives_validation_error():
+    formula = {"op": "count", "from": "leads", "group_by": "cf_плотность_эфира"}
+    with pytest.raises(AiFormulaError) as excinfo:
+        _repair_group_fields(formula, GROUP_DICTIONARY)
+    assert "не найдено" in str(excinfo.value)

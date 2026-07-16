@@ -882,6 +882,7 @@ def build_formula_draft(
         draft["formula"] = _repair_temporal_conditions(draft["formula"], dictionary, user_prompt=user_prompt)
         draft["formula"] = _inherit_table_base_conditions(draft["formula"])
         draft["formula"] = _repair_temporal_conditions(draft["formula"], dictionary, user_prompt=user_prompt)
+        draft["formula"] = _repair_group_fields(draft["formula"], dictionary)
         errors = _formula_validation_errors(draft["formula"])
         if errors:
             raise AiFormulaError("AI собрал неполную формулу: " + "; ".join(errors[:5]))
@@ -1128,6 +1129,95 @@ def _repair_temporal_conditions(node: Any, dictionary: dict[str, Any], *, user_p
         return result
 
     return walk(node)
+
+
+def _repair_group_fields(node: Any, dictionary: dict[str, Any]) -> Any:
+    """Чинит выдуманные моделью group_by по словарю полей аккаунта.
+
+    Модель иногда группирует по несуществующему полю вида "cf_источник" —
+    без ремонта движок падает на «Unknown group field». Поле сопоставляется
+    по label из словаря (точное совпадение, подстрока, морфологический
+    префикс — как в _keep_dictionary_field) и заменяется на реальный ключ
+    (cf_<id>). Если сопоставить не удалось — честная AiFormulaError с
+    просьбой уточнить название, а не падение движка.
+    """
+    fields_by_entity = _dictionary_fields_by_entity(dictionary)
+
+    def repair_one(raw: Any, fields: dict[str, dict[str, Any]]) -> Any:
+        field = str(raw or "").strip()
+        if not field or field in fields:
+            return raw
+        replacement = _match_group_field(field, fields)
+        if replacement:
+            return replacement
+        raise AiFormulaError(
+            f"Поле группировки «{field}» не найдено в аккаунте — уточни название поля."
+        )
+
+    def walk(value: Any, entity_type: str = "leads") -> Any:
+        if isinstance(value, list):
+            return [walk(item, entity_type) for item in value]
+        if not isinstance(value, dict):
+            return value
+        current_entity = str(value.get("from") or value.get("entity") or entity_type or "leads")
+        fields = fields_by_entity.get(current_entity) or {}
+        result: dict[str, Any] = {}
+        for key, child in value.items():
+            if key == "group_by" and fields:
+                # Пустой словарь полей = сущность нам неизвестна; тогда не
+                # выдумываем ошибок и оставляем group_by как есть.
+                if isinstance(child, list):
+                    result[key] = [repair_one(item, fields) for item in child]
+                else:
+                    result[key] = repair_one(child, fields)
+                continue
+            if key == "columns" and isinstance(child, dict):
+                result[key] = {title: walk(formula, current_entity) for title, formula in child.items()}
+                continue
+            if key in {"vars", "variables"} and isinstance(child, dict):
+                result[key] = {name: walk(formula, current_entity) for name, formula in child.items()}
+                continue
+            result[key] = walk(child, current_entity) if isinstance(child, (dict, list)) else child
+        return result
+
+    return walk(node)
+
+
+def _match_group_field(raw: str, fields: dict[str, dict[str, Any]]) -> str | None:
+    target = raw[3:] if raw.startswith("cf_") and not raw[3:].isdigit() else raw
+    target_norm = _normalize_prompt_text(target)
+    target_tokens = _text_tokens(target)
+    if not target_norm:
+        return None
+    best_score = 0
+    best_key: str | None = None
+    for key, field in fields.items():
+        label = str(field.get("label") or "")
+        label_norm = _normalize_prompt_text(label)
+        label_tokens = _text_tokens(label)
+        score = 0
+        if label_norm and label_norm == target_norm:
+            score += 100
+        elif label_norm and (target_norm in label_norm or label_norm in target_norm):
+            score += 60
+        score += 15 * len(label_tokens & target_tokens)
+        # морфология: русские падежи меняют окончание, основа остаётся —
+        # общий префикс >= 5 символов считаем совпадением
+        # ("источник"/"источника" -> "источ").
+        for label_token in label_tokens:
+            if len(label_token) < 5:
+                continue
+            prefix = label_token[:5]
+            if any(token.startswith(prefix) for token in target_tokens if len(token) >= 5):
+                score += 12
+        if not score:
+            continue
+        if field.get("groupable"):
+            score += 5
+        if score > best_score:
+            best_score = score
+            best_key = key
+    return best_key if best_score >= 12 else None
 
 
 def _dictionary_fields_by_entity(dictionary: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
@@ -1608,6 +1698,16 @@ def _keep_dictionary_field(entity_value: str, field: dict[str, Any], prompt_toke
         for label_token in label_tokens:
             if len(label_token) < 5:
                 continue
+            prefix = label_token[:5]
+            if any(prompt_token.startswith(prefix) for prompt_token in prompt_long):
+                return True
+    # groupable-поля переживают тот же морфологический матч: «топ-5 источников
+    # заявок» должен оставить в словаре поле «Источник заявки», иначе модели
+    # не по чему группировать и она выдумывает group_by.
+    if field.get("groupable"):
+        label_tokens = {token for token in _text_tokens(label) if len(token) >= 5}
+        prompt_long = {token for token in prompt_tokens if len(token) >= 5}
+        for label_token in label_tokens:
             prefix = label_token[:5]
             if any(prompt_token.startswith(prefix) for prompt_token in prompt_long):
                 return True
