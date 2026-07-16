@@ -1083,7 +1083,13 @@ class FormulaEngine:
 
     def _apply_math(self, op: str, left: FormulaValue, right: FormulaValue) -> FormulaValue:
         if left.kind == "scalar" and right.kind == "scalar":
-            return FormulaValue(kind="scalar", value=self._math(op, left.value or 0, right.value or 0), meta={"op": op})
+            # Компоненты операции сохраняются в meta, чтобы фронт мог показать
+            # дельту «к прошлому периоду» под числом (subtract/divide периодов).
+            return FormulaValue(
+                kind="scalar",
+                value=self._math(op, left.value or 0, right.value or 0),
+                meta={"op": op, "left": left.value or 0, "right": right.value or 0},
+            )
         if left.kind == "series" or right.kind == "series":
             return self._apply_series_math(op, left, right)
         raise ValueError(f"Unsupported math operands: {left.kind}, {right.kind}")

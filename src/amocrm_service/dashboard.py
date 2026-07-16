@@ -1039,6 +1039,33 @@ def render_dashboard(
           font-size: 30px;
           line-height: 1;
         }}
+        .number-card .number-trend {{
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          margin-top: 8px;
+        }}
+        .number-card .number-trend strong {{
+          display: inline;
+          font-size: 13px;
+          line-height: 1.2;
+          color: #64748b;
+        }}
+        .number-card .number-trend strong.trend-up {{
+          color: #15803d;
+        }}
+        .number-card .number-trend strong.trend-down {{
+          color: #b91c1c;
+        }}
+        .number-card .number-trend span {{
+          display: inline;
+          margin-bottom: 0;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0;
+          text-transform: none;
+          color: var(--quiet);
+        }}
         .visual-chart {{
           display: grid;
           gap: 12px;
@@ -3674,10 +3701,11 @@ def render_dashboard(
           }}
           return null;
         }};
-        const renderMetricCard = (label, value, suffix = '') => `
+        const renderMetricCard = (label, value, suffix = '', extraHtml = '') => `
           <article class="number-card">
             <span>${{safeText(label)}}</span>
             <strong>${{formatNumber(value, suffix)}}</strong>
+            ${{extraHtml}}
           </article>
         `;
         const labelForRow = (row) => {{
@@ -3917,10 +3945,46 @@ def render_dashboard(
             </td>
           `;
         }};
-        const renderFormulaResultHtml = (result, preferredView = 'table', tableSettings = {{}}, widgetId = '') => {{
+        const formulaComparesPeriods = (formulaSpec) => {{
+          // Тренд под числом показываем только для сравнения периодов: в формуле
+          // должен быть фильтр по прошлому периоду (previous_month/previous_week).
+          if (!formulaSpec) return false;
+          try {{
+            return /"(previous_month|previous_week)"/.test(JSON.stringify(formulaSpec));
+          }} catch (error) {{
+            return false;
+          }}
+        }};
+        const renderScalarTrendHtml = (result, formulaSpec = null) => {{
+          const meta = result?.meta || {{}};
+          const op = String(meta.op || '');
+          if (op !== 'subtract' && op !== 'divide') return '';
+          const left = Number(meta.left);
+          const right = Number(meta.right);
+          if (!Number.isFinite(left) || !Number.isFinite(right)) return '';
+          if (!formulaComparesPeriods(formulaSpec)) return '';
+          let delta = 0;
+          let suffix = '';
+          if (op === 'subtract') {{
+            delta = left - right;
+          }} else {{
+            if (!right) return '';
+            delta = Math.round((left / right - 1) * 1000) / 10;
+            suffix = '%';
+          }}
+          const cls = delta > 0 ? 'trend-up' : delta < 0 ? 'trend-down' : '';
+          const sign = delta > 0 ? '+' : delta < 0 ? '−' : '';
+          return `
+            <div class="number-trend">
+              <strong class="${{cls}}">${{safeText(sign + formatNumber(Math.abs(delta), suffix))}}</strong>
+              <span>к прошлому периоду</span>
+            </div>
+          `;
+        }};
+        const renderFormulaResultHtml = (result, preferredView = 'table', tableSettings = {{}}, widgetId = '', formulaSpec = null) => {{
           if (!result) return '<div class="report-empty">Результат еще не рассчитан</div>';
           if (result.kind === 'scalar') {{
-            return `<div class="number-grid">${{renderMetricCard('Результат', result.value ?? 0)}}</div>`;
+            return `<div class="number-grid">${{renderMetricCard('Результат', result.value ?? 0, '', renderScalarTrendHtml(result, formulaSpec))}}</div>`;
           }}
           const rows = Array.isArray(result.rows) ? result.rows : [];
           if (!rows.length) return '<div class="report-empty">Нет данных</div>';
@@ -4489,7 +4553,7 @@ def render_dashboard(
             if (!response.ok || !data.ok) throw new Error(data.error || 'formula failed');
             lastFormulaResult = data.result;
             lastFormulaDiagnostics = data.diagnostics || null;
-            formulaResultEl.innerHTML = renderFormulaResultHtml(data.result) + renderFormulaExplanationHtml(data.result, lastFormulaDiagnostics) + renderFormulaDiagnosticsHtml(lastFormulaDiagnostics);
+            formulaResultEl.innerHTML = renderFormulaResultHtml(data.result, 'table', {{}}, '', formula) + renderFormulaExplanationHtml(data.result, lastFormulaDiagnostics) + renderFormulaDiagnosticsHtml(lastFormulaDiagnostics);
             if (formulaStatusEl) formulaStatusEl.textContent = 'Готово. Результат можно отправить на дашборд.';
           }} catch (error) {{
             lastFormulaResult = null;
@@ -4525,7 +4589,7 @@ def render_dashboard(
               </div>
             `
             : '<p>Уточняющих вопросов нет.</p>';
-          const resultHtml = result ? renderFormulaResultHtml(result, draft.view || 'table') + renderFormulaExplanationHtml(result, diagnostics) + renderFormulaDiagnosticsHtml(diagnostics) : '';
+          const resultHtml = result ? renderFormulaResultHtml(result, draft.view || 'table', {{}}, '', draft.formula || null) + renderFormulaExplanationHtml(result, diagnostics) + renderFormulaDiagnosticsHtml(diagnostics) : '';
           return `
             <div class="ai-draft-card">
               <h4>${{safeText(draft.title || 'Черновик показателя')}}</h4>
@@ -4656,7 +4720,7 @@ def render_dashboard(
             formulaReadableEl.innerHTML = `AI-черновик: <b>${{safeText(lastAiFormulaDraft.title || 'показатель')}}</b>. ${{safeText(lastAiFormulaDraft.explanation || '')}}`;
           }}
           if (formulaResultEl && lastFormulaResult) {{
-            formulaResultEl.innerHTML = renderFormulaResultHtml(lastFormulaResult, lastAiFormulaDraft.view || 'table') + renderFormulaExplanationHtml(lastFormulaResult, lastFormulaDiagnostics) + renderFormulaDiagnosticsHtml(lastFormulaDiagnostics);
+            formulaResultEl.innerHTML = renderFormulaResultHtml(lastFormulaResult, lastAiFormulaDraft.view || 'table', {{}}, '', lastAiFormulaDraft.formula || null) + renderFormulaExplanationHtml(lastFormulaResult, lastFormulaDiagnostics) + renderFormulaDiagnosticsHtml(lastFormulaDiagnostics);
           }}
           formulaStatusEl.textContent = 'AI-черновик применен. Можно отправить показатель на дашборд.';
         }};
@@ -5143,7 +5207,7 @@ def render_dashboard(
           `;
           container.appendChild(body);
           if (widget.widget_type === 'formula' || widget.formula_spec) {{
-            body.innerHTML = renderFormulaResultHtml(formulaResult || {{ kind: 'table', rows }}, widget.view || 'table', widget.table_settings || {{}}, widget.id || '');
+            body.innerHTML = renderFormulaResultHtml(formulaResult || {{ kind: 'table', rows }}, widget.view || 'table', widget.table_settings || {{}}, widget.id || '', widget.formula_spec || null);
             return;
           }}
           if (widget.view === 'number') {{
