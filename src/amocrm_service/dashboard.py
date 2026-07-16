@@ -2077,8 +2077,48 @@ def render_dashboard(
           letter-spacing: .1em;
           text-transform: uppercase;
         }}
+        .formula-data-table thead th {{
+          vertical-align: bottom;
+        }}
+        .formula-data-table.has-fixed-columns {{
+          /* Только для таблиц с заданными ширинами: auto-раскладка трактует
+             width на th как пожелание и растягивает колонки по контенту. */
+          table-layout: fixed;
+        }}
+        .formula-data-table.has-fixed-columns th {{
+          min-width: 40px;
+          /* В узких колонках капс и 11px не читаются: обычный регистр,
+             мельче и без разрядки. Обычные таблицы не трогаем. */
+          font-size: calc(var(--widget-header-font, 10px) * var(--widget-font-scale, 1));
+          text-transform: none;
+          letter-spacing: .02em;
+        }}
+        .formula-data-table.has-fixed-columns td {{
+          overflow: hidden;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+        }}
+        .formula-data-table.has-fixed-columns th,
+        .formula-data-table.has-fixed-columns td {{
+          padding-left: calc(7px * var(--widget-font-scale, 1));
+          padding-right: calc(7px * var(--widget-font-scale, 1));
+        }}
         .formula-data-table th .formula-col-title {{
           display: block;
+        }}
+        .formula-data-table th.formula-col-fixed .formula-col-title {{
+          /* Заголовок переносится ТОЛЬКО по пробелам и растит шапку в высоту;
+             слово, которое не влезает, обрезается, а не рвётся. Больше 3
+             строк — обрезка, полное имя в title у th. */
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 3;
+          line-clamp: 3;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: normal;
+          word-break: normal;
+          overflow-wrap: normal;
         }}
         .widget-columns-list {{
           display: flex;
@@ -4017,7 +4057,7 @@ def render_dashboard(
           const drilldown = row?._drilldown?.[column];
           const ids = drilldown?.entity_ids;
           const canOpen = widgetId && Array.isArray(ids) && ids.length > 0;
-          if (!canOpen) return `<td class="${{safeText(className)}}">${{safeText(formattedValue)}}</td>`;
+          if (!canOpen) return `<td class="${{safeText(className)}}" title="${{safeText(formattedValue)}}">${{safeText(formattedValue)}}</td>`;
           const title = drilldown.truncated
             ? `Открыть первые ${{ids.length}} сделок из ${{drilldown.total || ids.length}}`
             : `Открыть ${{drilldown.total || ids.length}} сделок`;
@@ -4030,7 +4070,7 @@ def render_dashboard(
         const renderSeriesDrilldownCell = (widgetId, row, formattedValue, className = '') => {{
           const ids = row?.entity_ids;
           const canOpen = widgetId && Array.isArray(ids) && ids.length > 0;
-          if (!canOpen) return `<td class="${{safeText(className)}}">${{safeText(formattedValue)}}</td>`;
+          if (!canOpen) return `<td class="${{safeText(className)}}" title="${{safeText(formattedValue)}}">${{safeText(formattedValue)}}</td>`;
           const title = row.trace_truncated
             ? `Открыть первые ${{ids.length}} сделок из ${{row.trace_total || ids.length}}`
             : `Открыть ${{row.trace_total || ids.length}} сделок`;
@@ -4140,9 +4180,21 @@ def render_dashboard(
             const widthStyle = width ? ` class="formula-col-fixed" style="width: ${{width}}px; max-width: ${{width}}px;"` : '';
             return `<th title="${{safeText(original)}}"${{widthStyle}}><span class="formula-col-title">${{safeText(columnTitles[column] || original)}}</span></th>`;
           }};
+          // table-layout: fixed включается только при заданных ширинах — иначе
+          // auto-раскладка игнорирует width на th и раздаёт остаток по контенту.
+          const hasFixedColumns = Object.keys(columnWidths).length > 0;
+          // Ширина таблицы = сумма колонок (незаданным даём дефолт), иначе
+          // width:100% растянул бы колонки на контейнер. width:auto не годится:
+          // с ним браузер отключает fixed-алгоритм раскладки.
+          const fixedTotal = [tableLabelColumn].concat(prepared.columns).reduce(
+            (total, column) => total + (Number(columnWidths[column]) || (column === tableLabelColumn ? 160 : 120)), 0);
+          const tableStyles = [];
+          if (hasFixedColumns) tableStyles.push(`width: ${{fixedTotal}}px`);
+          const tableAttrs = ` class="formula-data-table${{hasFixedColumns ? ' has-fixed-columns' : ''}}"`
+            + (tableStyles.length ? ` style="${{tableStyles.join('; ')}}"` : '');
           return `
             <div class="report-table-wrap formula-table-wrap">
-              <table class="formula-data-table">
+              <table${{tableAttrs}}>
                 <thead>
                   <tr>
                     ${{headerCell(tableLabelColumn, 'Строка')}}
@@ -4151,7 +4203,7 @@ def render_dashboard(
                 </thead>
                 <tbody>${{prepared.rows.map((row) => `
                   <tr class="${{formulaRowClass(row)}}">
-                    <td class="formula-row-label">${{safeText(row.label ?? row.key ?? 'Итого')}}</td>
+                    <td class="formula-row-label" title="${{safeText(row.label ?? row.key ?? 'Итого')}}">${{safeText(row.label ?? row.key ?? 'Итого')}}</td>
                     ${{prepared.columns.map((column) => renderDrilldownCell(widgetId, row, column, formatFormulaTableValue(column, row[column] ?? 0), formulaCellClass(column, row[column] ?? 0))).join('')}}
                   </tr>
                 `).join('')}}</tbody>
