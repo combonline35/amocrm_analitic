@@ -1039,6 +1039,33 @@ def render_dashboard(
           font-size: 30px;
           line-height: 1;
         }}
+        .number-card .number-trend {{
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          margin-top: 8px;
+        }}
+        .number-card .number-trend strong {{
+          display: inline;
+          font-size: 13px;
+          line-height: 1.2;
+          color: #64748b;
+        }}
+        .number-card .number-trend strong.trend-up {{
+          color: #15803d;
+        }}
+        .number-card .number-trend strong.trend-down {{
+          color: #b91c1c;
+        }}
+        .number-card .number-trend span {{
+          display: inline;
+          margin-bottom: 0;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0;
+          text-transform: none;
+          color: var(--quiet);
+        }}
         .visual-chart {{
           display: grid;
           gap: 12px;
@@ -3728,10 +3755,11 @@ def render_dashboard(
           }}
           return null;
         }};
-        const renderMetricCard = (label, value, suffix = '') => `
+        const renderMetricCard = (label, value, suffix = '', extraHtml = '') => `
           <article class="number-card">
             <span>${{safeText(label)}}</span>
             <strong>${{formatNumber(value, suffix)}}</strong>
+            ${{extraHtml}}
           </article>
         `;
         const labelForRow = (row) => {{
@@ -3781,28 +3809,51 @@ def render_dashboard(
         }};
         const renderLineChart = (rows, metric = 'count') => {{
           if (!rows.length) return '<div class="report-empty">Нет данных</div>';
-          const values = rows.slice(0, 24).map((row) => metricValue(row, metric));
+          const items = rows.slice(0, 24);
+          const values = items.map((row) => metricValue(row, metric));
           const max = Math.max(...values, 1);
+          const minValue = Math.min(...values);
           const width = 900;
-          const height = 260;
+          const height = 280;
           const pad = 26;
+          const padBottom = 46;
+          const chartBottom = height - padBottom;
           const step = values.length > 1 ? (width - pad * 2) / (values.length - 1) : 0;
-          const points = values.map((value, index) => {{
-            const x = pad + index * step;
-            const y = height - pad - (value / max) * (height - pad * 2);
-            return `${{x}},${{y}}`;
-          }}).join(' ');
-          const area = `${{pad}},${{height - pad}} ${{points}} ${{width - pad}},${{height - pad}}`;
+          const pointAt = (value, index) => [pad + index * step, chartBottom - (value / max) * (chartBottom - pad)];
+          const points = values.map((value, index) => pointAt(value, index).join(',')).join(' ');
+          const area = `${{pad}},${{chartBottom}} ${{points}} ${{pad + Math.max(values.length - 1, 0) * step}},${{chartBottom}}`;
+          const gridLines = [0.25, 0.5, 0.75, 1].map((ratio) => {{
+            const y = chartBottom - ratio * (chartBottom - pad);
+            return `<line x1="${{pad}}" y1="${{y}}" x2="${{width - pad}}" y2="${{y}}" stroke="#e6eef8" stroke-width="1"></line>`;
+          }}).join('');
+          // Подписи X (ключи группировки — месяцы) с прореживанием до ~6 меток;
+          // последняя точка подписывается всегда.
+          const labelStep = Math.max(1, Math.ceil(items.length / 6));
+          const xLabels = items.map((row, index) => {{
+            if (index % labelStep !== 0 && index !== items.length - 1) return '';
+            const [x] = pointAt(values[index], index);
+            const text = String(labelForRow(row) || '').slice(0, 12);
+            return `<text x="${{x}}" y="${{height - 12}}" text-anchor="middle" font-size="12" fill="#8a9bb3">${{safeText(text)}}</text>`;
+          }}).join('');
+          // Значения точек: все, когда точек немного; иначе только min и max.
+          const valueLabels = values.map((value, index) => {{
+            if (values.length > 12 && value !== max && value !== minValue) return '';
+            const [x, y] = pointAt(value, index);
+            return `<text x="${{x}}" y="${{y - 10}}" text-anchor="middle" font-size="12" font-weight="700" fill="#12355b">${{safeText(formatNumber(value))}}</text>`;
+          }}).join('');
           return `
             <div class="visual-chart">
               <div class="chart-legend"><span>${{safeText(metricLabels[metric] || metric)}}</span><span>${{formatNumber(max)}}</span></div>
               <svg class="line-chart" viewBox="0 0 ${{width}} ${{height}}" role="img" aria-label="График">
+                ${{gridLines}}
                 <polyline points="${{area}}" fill="rgba(37, 99, 235, .10)" stroke="none"></polyline>
                 <polyline points="${{points}}" fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></polyline>
                 ${{points.split(' ').map((point) => {{
                   const [x, y] = point.split(',');
                   return `<circle cx="${{x}}" cy="${{y}}" r="5" fill="#2563eb" stroke="#fff" stroke-width="3"></circle>`;
                 }}).join('')}}
+                ${{valueLabels}}
+                ${{xLabels}}
               </svg>
             </div>
           `;
@@ -3948,10 +3999,46 @@ def render_dashboard(
             </td>
           `;
         }};
-        const renderFormulaResultHtml = (result, preferredView = 'table', tableSettings = {{}}, widgetId = '') => {{
+        const formulaComparesPeriods = (formulaSpec) => {{
+          // Тренд под числом показываем только для сравнения периодов: в формуле
+          // должен быть фильтр по прошлому периоду (previous_month/previous_week).
+          if (!formulaSpec) return false;
+          try {{
+            return /"(previous_month|previous_week)"/.test(JSON.stringify(formulaSpec));
+          }} catch (error) {{
+            return false;
+          }}
+        }};
+        const renderScalarTrendHtml = (result, formulaSpec = null) => {{
+          const meta = result?.meta || {{}};
+          const op = String(meta.op || '');
+          if (op !== 'subtract' && op !== 'divide') return '';
+          const left = Number(meta.left);
+          const right = Number(meta.right);
+          if (!Number.isFinite(left) || !Number.isFinite(right)) return '';
+          if (!formulaComparesPeriods(formulaSpec)) return '';
+          let delta = 0;
+          let suffix = '';
+          if (op === 'subtract') {{
+            delta = left - right;
+          }} else {{
+            if (!right) return '';
+            delta = Math.round((left / right - 1) * 1000) / 10;
+            suffix = '%';
+          }}
+          const cls = delta > 0 ? 'trend-up' : delta < 0 ? 'trend-down' : '';
+          const sign = delta > 0 ? '+' : delta < 0 ? '−' : '';
+          return `
+            <div class="number-trend">
+              <strong class="${{cls}}">${{safeText(sign + formatNumber(Math.abs(delta), suffix))}}</strong>
+              <span>к прошлому периоду</span>
+            </div>
+          `;
+        }};
+        const renderFormulaResultHtml = (result, preferredView = 'table', tableSettings = {{}}, widgetId = '', formulaSpec = null) => {{
           if (!result) return '<div class="report-empty">Результат еще не рассчитан</div>';
           if (result.kind === 'scalar') {{
-            return `<div class="number-grid">${{renderMetricCard('Результат', result.value ?? 0)}}</div>`;
+            return `<div class="number-grid">${{renderMetricCard('Результат', result.value ?? 0, '', renderScalarTrendHtml(result, formulaSpec))}}</div>`;
           }}
           const rows = Array.isArray(result.rows) ? result.rows : [];
           if (!rows.length) return '<div class="report-empty">Нет данных</div>';
@@ -4520,7 +4607,7 @@ def render_dashboard(
             if (!response.ok || !data.ok) throw new Error(data.error || 'formula failed');
             lastFormulaResult = data.result;
             lastFormulaDiagnostics = data.diagnostics || null;
-            formulaResultEl.innerHTML = renderFormulaResultHtml(data.result) + renderFormulaExplanationHtml(data.result, lastFormulaDiagnostics) + renderFormulaDiagnosticsHtml(lastFormulaDiagnostics);
+            formulaResultEl.innerHTML = renderFormulaResultHtml(data.result, 'table', {{}}, '', formula) + renderFormulaExplanationHtml(data.result, lastFormulaDiagnostics) + renderFormulaDiagnosticsHtml(lastFormulaDiagnostics);
             if (formulaStatusEl) formulaStatusEl.textContent = 'Готово. Результат можно отправить на дашборд.';
           }} catch (error) {{
             lastFormulaResult = null;
@@ -4556,7 +4643,7 @@ def render_dashboard(
               </div>
             `
             : '<p>Уточняющих вопросов нет.</p>';
-          const resultHtml = result ? renderFormulaResultHtml(result, draft.view || 'table') + renderFormulaExplanationHtml(result, diagnostics) + renderFormulaDiagnosticsHtml(diagnostics) : '';
+          const resultHtml = result ? renderFormulaResultHtml(result, draft.view || 'table', {{}}, '', draft.formula || null) + renderFormulaExplanationHtml(result, diagnostics) + renderFormulaDiagnosticsHtml(diagnostics) : '';
           return `
             <div class="ai-draft-card">
               <h4>${{safeText(draft.title || 'Черновик показателя')}}</h4>
@@ -4687,7 +4774,7 @@ def render_dashboard(
             formulaReadableEl.innerHTML = `AI-черновик: <b>${{safeText(lastAiFormulaDraft.title || 'показатель')}}</b>. ${{safeText(lastAiFormulaDraft.explanation || '')}}`;
           }}
           if (formulaResultEl && lastFormulaResult) {{
-            formulaResultEl.innerHTML = renderFormulaResultHtml(lastFormulaResult, lastAiFormulaDraft.view || 'table') + renderFormulaExplanationHtml(lastFormulaResult, lastFormulaDiagnostics) + renderFormulaDiagnosticsHtml(lastFormulaDiagnostics);
+            formulaResultEl.innerHTML = renderFormulaResultHtml(lastFormulaResult, lastAiFormulaDraft.view || 'table', {{}}, '', lastAiFormulaDraft.formula || null) + renderFormulaExplanationHtml(lastFormulaResult, lastFormulaDiagnostics) + renderFormulaDiagnosticsHtml(lastFormulaDiagnostics);
           }}
           formulaStatusEl.textContent = 'AI-черновик применен. Можно отправить показатель на дашборд.';
         }};
@@ -5178,7 +5265,7 @@ def render_dashboard(
           `;
           container.appendChild(body);
           if (widget.widget_type === 'formula' || widget.formula_spec) {{
-            body.innerHTML = renderFormulaResultHtml(formulaResult || {{ kind: 'table', rows }}, widget.view || 'table', widget.table_settings || {{}}, widget.id || '');
+            body.innerHTML = renderFormulaResultHtml(formulaResult || {{ kind: 'table', rows }}, widget.view || 'table', widget.table_settings || {{}}, widget.id || '', widget.formula_spec || null);
             return;
           }}
           if (widget.view === 'number') {{
