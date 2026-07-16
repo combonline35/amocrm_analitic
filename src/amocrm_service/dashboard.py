@@ -2249,6 +2249,46 @@ def render_dashboard(
           font-size: 12px;
           color: var(--quiet);
         }}
+        .column-builder-live-caption {{
+          margin-bottom: 6px;
+          font-size: 11px;
+          color: var(--quiet);
+        }}
+        .column-builder-live-table {{
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 12.5px;
+          color: #3d4a5c;
+        }}
+        .column-builder-live-table th {{
+          padding: 6px 8px;
+          border-bottom: 1px solid #dbe7f6;
+          background: #f4f8fd;
+          color: #8a9bb3;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: .06em;
+          text-transform: uppercase;
+          text-align: right;
+          white-space: nowrap;
+        }}
+        .column-builder-live-table td {{
+          padding: 5px 8px;
+          border-bottom: 1px solid #edf2f8;
+          text-align: right;
+          white-space: nowrap;
+          font-variant-numeric: tabular-nums;
+        }}
+        .column-builder-live-table th:first-child,
+        .column-builder-live-table td:first-child {{
+          text-align: left;
+        }}
+        .column-builder-live-table tr:last-child td {{
+          border-bottom: 0;
+        }}
+        .column-builder-live-label {{
+          font-weight: 700;
+        }}
         .widget-column-move {{
           display: flex;
           flex: none;
@@ -4751,6 +4791,7 @@ def render_dashboard(
         // отдельный AI-запрос на одну колонку; таблица склеивается из готовых.
         const columnBuilderEl = document.querySelector('[data-column-builder]');
         const columnBuilderListEl = document.querySelector('[data-column-builder-list]');
+        const columnBuilderLiveEl = document.querySelector('[data-column-builder-live]');
         const columnBuilderGroupEl = document.querySelector('[data-column-builder-group]');
         const columnBuilderStatusEl = document.querySelector('[data-column-builder-status]');
         let columnBuilderSeq = 0;
@@ -4812,6 +4853,90 @@ def render_dashboard(
           if (block.status === 'error') return `<span class="column-builder-row-status error">ошибка ✗ ${{safeText(block.error || '')}}</span>`;
           return '';
         }};
+        // Доля (форматировать процентом): у одиночной колонки нет
+        // meta.ratio_columns (он только у table-результата) — признак берём
+        // из op формулы блока либо meta.op его результата.
+        const columnBlockIsRatio = (block) => {{
+          if (String(block.formula?.op || '').toLowerCase() === 'divide') return true;
+          if (Array.isArray(block.result?.meta?.ratio_columns) && block.result.meta.ratio_columns.length) return true;
+          return String(block.result?.meta?.op || '').toLowerCase() === 'divide';
+        }};
+        const columnBlockRowsMap = (block) => {{
+          const map = new Map();
+          const result = block.result;
+          if (!result) return map;
+          if (result.kind === 'series') {{
+            (result.rows || []).forEach((row) => {{
+              const key = String(row.key ?? row.label ?? '');
+              if (!key) return;
+              map.set(key, {{ label: row.label ?? key, value: Number(row.value) || 0 }});
+            }});
+          }} else if (result.kind === 'scalar') {{
+            map.set('__total__', {{ label: 'Итого', value: Number(result.value) || 0 }});
+          }}
+          return map;
+        }};
+        // Живая таблица: склейка УЖЕ полученных результатов блоков на фронте,
+        // ни одного запроса к бэку. Финальную формулу с честным пересчётом
+        // по-прежнему делает «Собрать таблицу».
+        const renderColumnBuilderLiveTable = () => {{
+          if (!columnBuilderLiveEl) return;
+          const okBlocks = columnBuilderBlocks.filter((block) => block.status === 'ok' && block.formula && block.result);
+          if (!okBlocks.length) {{
+            columnBuilderLiveEl.innerHTML = '';
+            return;
+          }}
+          const skipped = columnBuilderBlocks.length - okBlocks.length;
+          const columnDefs = okBlocks.map((block, index) => ({{
+            title: String(block.title || '').trim() || `Колонка ${{index + 1}}`,
+            rows: columnBlockRowsMap(block),
+            isRatio: columnBlockIsRatio(block),
+          }}));
+          // Union ключей в порядке первого появления (первая колонка главнее),
+          // затем сортировка по убыванию первой колонки; строка «Итого» — в конец.
+          const keys = [];
+          const seen = new Set();
+          columnDefs.forEach((def) => def.rows.forEach((_, key) => {{
+            if (!seen.has(key)) {{
+              seen.add(key);
+              keys.push(key);
+            }}
+          }}));
+          const firstRows = columnDefs[0].rows;
+          keys.sort((a, b) => (Number(firstRows.get(b)?.value) || 0) - (Number(firstRows.get(a)?.value) || 0));
+          const totalIndex = keys.indexOf('__total__');
+          if (totalIndex >= 0) keys.push(keys.splice(totalIndex, 1)[0]);
+          const labelFor = (key) => {{
+            for (const def of columnDefs) {{
+              const row = def.rows.get(key);
+              if (row?.label) return row.label;
+            }}
+            return key;
+          }};
+          const cellText = (def, key) => {{
+            const value = Number(def.rows.get(key)?.value) || 0;
+            return def.isRatio ? formatNumber(value * 100, '%') : formatNumber(value);
+          }};
+          columnBuilderLiveEl.innerHTML = `
+            <div class="column-builder-live-caption">предпросмотр · собрано из отдельных колонок${{skipped > 0 ? ` · пропущено: ${{skipped}}` : ''}}</div>
+            <div class="report-table-wrap">
+              <table class="column-builder-live-table">
+                <thead>
+                  <tr>
+                    <th>Строка</th>
+                    ${{columnDefs.map((def) => `<th>${{safeText(def.title)}}</th>`).join('')}}
+                  </tr>
+                </thead>
+                <tbody>${{keys.map((key) => `
+                  <tr>
+                    <td class="column-builder-live-label">${{safeText(labelFor(key))}}</td>
+                    ${{columnDefs.map((def) => `<td>${{safeText(cellText(def, key))}}</td>`).join('')}}
+                  </tr>
+                `).join('')}}</tbody>
+              </table>
+            </div>
+          `;
+        }};
         const renderColumnBuilder = () => {{
           if (!columnBuilderListEl) return;
           if (!columnBuilderBlocks.length) {{
@@ -4834,6 +4959,7 @@ def render_dashboard(
               ${{block.preview ? `<div class="column-builder-preview">${{safeText(block.preview)}}</div>` : ''}}
             </div>
           `).join('');
+          renderColumnBuilderLiveTable();
         }};
         const columnBlockById = (blockId) => columnBuilderBlocks.find((block) => String(block.id) === String(blockId));
         const generateColumnBlock = async (blockId) => {{
@@ -4878,11 +5004,13 @@ def render_dashboard(
             if (!String(block.title || '').trim() && draftTitle) block.title = draftTitle;
             block.status = 'ok';
             block.preview = columnBlockPreviewText(data.result);
+            block.result = data.result || null;
           }} catch (error) {{
             block.status = 'error';
             block.error = error.message;
             block.formula = null;
             block.preview = '';
+            block.result = null;
           }}
           renderColumnBuilder();
         }};
@@ -4912,7 +5040,7 @@ def render_dashboard(
         columnBuilderEl?.addEventListener('click', async (event) => {{
           if (event.target.closest('[data-column-builder-add]')) {{
             columnBuilderSeq += 1;
-            columnBuilderBlocks.push({{ id: `col-${{columnBuilderSeq}}`, title: '', prompt: '', formula: null, status: 'empty', error: '', preview: '' }});
+            columnBuilderBlocks.push({{ id: `col-${{columnBuilderSeq}}`, title: '', prompt: '', formula: null, status: 'empty', error: '', preview: '', result: null }});
             renderColumnBuilder();
             return;
           }}
@@ -4950,6 +5078,11 @@ def render_dashboard(
           // Правка текста не перерисовывает список — фокус остаётся в поле.
           if (event.target.matches('[data-column-title]')) block.title = event.target.value;
           if (event.target.matches('[data-column-prompt]')) block.prompt = event.target.value;
+        }});
+        // Заголовок в живой таблице обновляем по blur (change), не на каждый
+        // символ — чтобы не дёргать перерисовку под руками.
+        columnBuilderEl?.addEventListener('change', (event) => {{
+          if (event.target.matches('[data-column-title]')) renderColumnBuilderLiveTable();
         }});
         renderColumnBuilder();
         const loadFormulaDictionary = async () => {{
@@ -7008,6 +7141,7 @@ def _render_constructor_shell(
               <button type="button" class="secondary" data-column-builder-assemble>Собрать таблицу</button>
               <span class="sync-status" data-column-builder-status>Добавь колонки и собери таблицу.</span>
             </div>
+            <div class="column-builder-live" data-column-builder-live></div>
             <div class="column-builder-list" data-column-builder-list></div>
             <div class="ai-formula-actions">
               <button type="button" class="secondary" data-column-builder-add>Добавить колонку</button>
