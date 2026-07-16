@@ -90,9 +90,36 @@ FORMULA_DRAFT_SCHEMA: dict[str, Any] = {
         "explanation": {"type": "string"},
         "confidence": {"type": "number"},
         "questions": {"type": "array", "items": {"type": "string"}},
+        # strict-режим json_schema запрещает объекты с произвольными ключами
+        # (additionalProperties должен быть false), поэтому ширины колонок
+        # едут массивом пар {title, width} — сервер свернёт его в объект
+        # {title: px}, как делает с columns.
+        "table_settings": {
+            "type": ["object", "null"],
+            "additionalProperties": False,
+            "properties": {
+                "column_widths": {
+                    "type": ["array", "null"],
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "title": {"type": "string"},
+                            "width": {"type": "integer"},
+                        },
+                        "required": ["title", "width"],
+                    },
+                },
+            },
+            "required": ["column_widths"],
+        },
     },
-    "required": ["title", "view", "size", "formula", "explanation", "confidence", "questions"],
+    "required": ["title", "view", "size", "formula", "explanation", "confidence", "questions", "table_settings"],
 }
+
+# Служебный ключ первой колонки таблицы (названия строк группировки) в
+# table_settings — тот же, что использует фронт (tableLabelColumn).
+DRAFT_ROW_LABEL_COLUMN = "__row_label__"
 
 TEMPORAL_OPS = {"this_month", "previous_month", "this_week", "previous_week", "last_days", "date_between"}
 TEMPORAL_FIELD_TYPES = {"date", "datetime", "month"}
@@ -141,6 +168,12 @@ Critical business rule: for measurement-conversion tables by "Замерщик" 
   колонка таблицы «Конверсия, %» -> ЧИСТЫЙ divide, ДОЛЯ (например 0.79), БЕЗ ×100 — интерфейс сам покажет проценты и подсветку;
   скалярный ответ «конверсия в целевые в процентах» (одно число) -> {"op":"multiply","left":{"op":"divide","left":<count целевых>,"right":<count всех>},"right":{"op":"const","value":100}}.
 - Таблица: возвращай columns массивом: [{"title":"Название","formula": <formula>}]. Сервер превратит его в объект.
+- title колонки — КОРОТКОЕ человеческое название (1-3 слова, до ~20 символов), НЕ пересказ условия. Пиши как в отчёте для руководителя.
+- Примеры коротких title: «количество сделок созданных в текущем месяце» -> "Заявки"; «количество где Целевой = 1» -> "Целевые"; «процент целевых от всех» -> "Cv в целевые"; «количество где Т_замер назначен = 1» -> "Замеры"; «сумма Бюджет по договорам» -> "Сумма договоров".
+- НЕ включай в title: условия (= 1), названия полей с префиксами (Т_, ДПвС-, З_), скобки с пояснениями, слова «количество сделок где».
+- Если два столбца похожи — различай коротко: «Замеры (новые)» / «Замеры (всего)».
+- title драфта (заголовок виджета) — тоже короткий и человеческий, как название отчёта: «Менеджеры: заявки и замеры», а не пересказ запроса.
+- table_settings.column_widths: для view="table" сразу предложи ширины колонок в пикселях массивом [{"title":"...","width":N}]: первая колонка с названиями строк группировки — title "__row_label__", ширина 140-160; числовые колонки 80-90; процентные 70-80. Для остальных view верни table_settings null.
 - Для KPI-таблицы по воронке не считай последующие колонки по всей истории. Колонки "Состоялось", "Договора", "Успешно" должны сохранять базовый период и базовые условия из колонки "Назначено", плюс свой этап.
 - Если по ТЗ колонки РАЗНЫЕ («первый столбец — все сделки, второй — где X = Y»), условие специфичной колонки ставь ТОЛЬКО в её формулу, не добавляй его в остальные. Общие для всех фильтры (период, источник, группировка) повторяй в каждой колонке.
 - Агрегация: {"op":"count","from":"leads","source_id":1,"where":[...]}.
@@ -886,6 +919,7 @@ def build_formula_draft(
         errors = _formula_validation_errors(draft["formula"])
         if errors:
             raise AiFormulaError("AI собрал неполную формулу: " + "; ".join(errors[:5]))
+    _normalize_draft_table_settings(draft)
     draft["configured"] = True
     draft["provider"] = config["provider"]
     draft["model"] = selected_model
@@ -946,6 +980,35 @@ def _prompt_mentions_any_source(prompt: str, sources: list[dict[str, Any]]) -> b
 
 def _normalize_prompt_text(value: str) -> str:
     return "".join(char for char in str(value).casefold() if char.isalnum())
+
+
+def _normalize_draft_table_settings(draft: dict[str, Any]) -> None:
+    """Сворачивает table_settings.column_widths из strict-массива пар
+    {title, width} в объект {title: px} — формат, который хранит виджет и
+    понимает фронт. Названия сверяются с колонками формулы (плюс служебный
+    "__row_label__" — первая колонка с названиями строк), ширины зажимаются
+    в разумные пределы. Пустой или мусорный результат убирает table_settings
+    из драфта целиком — виджет остаётся с авто-ширинами, как раньше.
+    """
+    raw = draft.pop("table_settings", None)
+    if not isinstance(raw, dict):
+        return
+    formula = draft.get("formula") if isinstance(draft.get("formula"), dict) else {}
+    columns = formula.get("columns") if isinstance(formula.get("columns"), dict) else {}
+    allowed = set(columns) | {DRAFT_ROW_LABEL_COLUMN}
+    widths: dict[str, int] = {}
+    for item in raw.get("column_widths") or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        width = item.get("width")
+        if isinstance(width, bool) or not isinstance(width, (int, float)):
+            continue
+        if title not in allowed:
+            continue
+        widths[title] = min(max(int(width), 40), 600)
+    if widths:
+        draft["table_settings"] = {"column_widths": widths}
 
 
 def _clean_formula(node: Any) -> Any:
