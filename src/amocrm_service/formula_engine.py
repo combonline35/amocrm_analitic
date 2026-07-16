@@ -713,14 +713,21 @@ class FormulaEngine:
             field = resolved_field
         op = str(condition.get("op") or condition.get("operator") or "eq").lower()
         field_def = fields[field]
-        if op in {"this_month", "previous_month", "this_week", "previous_week", "last_days", "date_between"}:
+        temporal_op = op in {"this_month", "previous_month", "this_week", "previous_week", "last_days", "date_between"}
+        if temporal_op:
             field_type = str(field_def.get("type") or "text").strip().lower()
             if field_type not in FIELD_TYPES_DATE and field_type != "month":
                 resolved_field = self._resolve_temporal_field_alias(field, fields)
                 if resolved_field:
                     field = resolved_field
                     field_def = fields[field]
-        value_type = self._condition_value_type(condition, field_def)
+        if temporal_op:
+            # Период — временная операция по определению: value_type условия
+            # игнорируем (модели случается прислать "text" для date-поля) и
+            # берём тип из метаданных. Не-временное поле честно упадёт ниже.
+            value_type = str(field_def.get("type") or "text").strip().lower()
+        else:
+            value_type = self._condition_value_type(condition, field_def)
         is_month_field = value_type == "month"
         is_date_field = value_type in FIELD_TYPES_DATE
         is_number_field = value_type == "number"
