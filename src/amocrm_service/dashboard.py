@@ -4803,6 +4803,7 @@ def render_dashboard(
                 formula_spec: formula,
                 query: {{}},
                 settings: {{}},
+                table_settings: lastAiFormulaDraft?.table_settings || {{}},
               }}),
             }});
             const data = await response.json();

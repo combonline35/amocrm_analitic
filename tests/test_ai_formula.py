@@ -7,6 +7,7 @@ from amocrm_service.ai_formula import (
     _clean_formula,
     _compact_dictionary,
     _inherit_table_base_conditions,
+    _normalize_draft_table_settings,
     _repair_group_fields,
     _simple_count_draft,
 )
@@ -328,3 +329,49 @@ def test_group_by_unknown_gives_validation_error():
     with pytest.raises(AiFormulaError) as excinfo:
         _repair_group_fields(formula, GROUP_DICTIONARY)
     assert "не найдено" in str(excinfo.value)
+
+
+def _draft_with_table(widths):
+    return {
+        "formula": {
+            "op": "table",
+            "columns": {
+                "Заявки": {"op": "count", "from": "leads"},
+                "Целевые": {"op": "count", "from": "leads"},
+            },
+        },
+        "table_settings": {"column_widths": widths},
+    }
+
+
+def test_draft_table_settings_folds_widths_to_dict():
+    draft = _draft_with_table([
+        {"title": "__row_label__", "width": 150},
+        {"title": "Заявки", "width": 85},
+        {"title": "Целевые", "width": 85},
+    ])
+    _normalize_draft_table_settings(draft)
+    assert draft["table_settings"] == {
+        "column_widths": {"__row_label__": 150, "Заявки": 85, "Целевые": 85},
+    }
+
+
+def test_draft_table_settings_drops_unknown_titles_and_clamps():
+    draft = _draft_with_table([
+        {"title": "Выдуманная колонка", "width": 100},
+        {"title": "Заявки", "width": 5},
+        {"title": "Целевые", "width": 9000},
+    ])
+    _normalize_draft_table_settings(draft)
+    # мусорный title отброшен, ширины зажаты в [40, 600]
+    assert draft["table_settings"] == {"column_widths": {"Заявки": 40, "Целевые": 600}}
+
+
+def test_draft_table_settings_empty_removes_key():
+    draft = _draft_with_table([])
+    _normalize_draft_table_settings(draft)
+    assert "table_settings" not in draft
+
+    draft_null = {"formula": {"op": "count", "from": "leads"}, "table_settings": None}
+    _normalize_draft_table_settings(draft_null)
+    assert "table_settings" not in draft_null
