@@ -8,6 +8,7 @@ from amocrm_service.ai_formula import (
     _compact_dictionary,
     _inherit_table_base_conditions,
     _normalize_draft_table_settings,
+    _repair_condition_values,
     _repair_group_fields,
     _simple_count_draft,
 )
@@ -375,3 +376,81 @@ def test_draft_table_settings_empty_removes_key():
     draft_null = {"formula": {"op": "count", "from": "leads"}, "table_settings": None}
     _normalize_draft_table_settings(draft_null)
     assert "table_settings" not in draft_null
+
+
+SELECT_DICTIONARY = {
+    "entities": [
+        {
+            "value": "leads",
+            "label": "Сделки",
+            "count": 10,
+            "fields": [
+                {"value": "cf_297941", "label": "Т_замер назначен", "type": "select", "groupable": True, "enums": ["1", "0"]},
+                {"value": "created_at", "label": "Дата создания", "type": "date", "groupable": False},
+            ],
+        }
+    ],
+    "operators": {},
+}
+
+
+def test_repair_condition_value_truncates_garbage():
+    formula = {
+        "op": "count",
+        "from": "leads",
+        "where": [{"field": "cf_297941", "op": "eq", "value": "1},{"}],
+    }
+    repaired = _repair_condition_values(formula, SELECT_DICTIONARY)
+    assert repaired["where"][0]["value"] == "1"
+
+
+def test_repair_condition_value_unknown_errors():
+    formula = {
+        "op": "count",
+        "from": "leads",
+        "where": [{"field": "cf_297941", "op": "eq", "value": "абракадабра"}],
+    }
+    with pytest.raises(AiFormulaError) as excinfo:
+        _repair_condition_values(formula, SELECT_DICTIONARY)
+    assert "не найдено в списке значений" in str(excinfo.value)
+    assert "Т_замер назначен" in str(excinfo.value)
+
+
+def test_repair_condition_value_valid_untouched():
+    formula = {
+        "op": "divide",
+        "left": {"op": "count", "from": "leads", "where": [{"field": "cf_297941", "op": "eq", "value": "1"}]},
+        "right": {"op": "count", "from": "leads", "where": [{"field": "created_at", "op": "this_month", "value": None}]},
+    }
+    repaired = _repair_condition_values(formula, SELECT_DICTIONARY)
+    # точное значение и не-select поле не тронуты
+    assert repaired["left"]["where"][0]["value"] == "1"
+    assert repaired["right"]["where"][0] == {"field": "created_at", "op": "this_month", "value": None}
+
+
+def test_repair_condition_value_fixes_in_list():
+    formula = {
+        "op": "count",
+        "from": "leads",
+        "where": [{"field": "cf_297941", "op": "in", "value": ["1},{", "0"]}],
+    }
+    repaired = _repair_condition_values(formula, SELECT_DICTIONARY)
+    assert repaired["where"][0]["value"] == ["1", "0"]
+
+
+def test_clean_strips_where_from_arithmetic_node():
+    raw = {
+        "op": "divide",
+        "from": "leads",
+        "group_by": "cf_297945",
+        "where": [{"field": "cf_297941", "op": "eq", "value": "1},{"}],
+        "left": {"op": "count", "from": "leads", "where": [{"field": "cf_297941", "op": "eq", "value": "1"}]},
+        "right": {"op": "count", "from": "leads"},
+    }
+    cleaned = _clean_formula(raw)
+    assert "where" not in cleaned
+    assert "from" not in cleaned
+    assert "group_by" not in cleaned
+    # left/right и их собственные условия не тронуты
+    assert cleaned["left"]["where"][0]["value"] == "1"
+    assert cleaned["right"] == {"op": "count", "from": "leads"}

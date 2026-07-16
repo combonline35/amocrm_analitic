@@ -916,6 +916,7 @@ def build_formula_draft(
         draft["formula"] = _inherit_table_base_conditions(draft["formula"])
         draft["formula"] = _repair_temporal_conditions(draft["formula"], dictionary, user_prompt=user_prompt)
         draft["formula"] = _repair_group_fields(draft["formula"], dictionary)
+        draft["formula"] = _repair_condition_values(draft["formula"], dictionary)
         errors = _formula_validation_errors(draft["formula"])
         if errors:
             raise AiFormulaError("AI собрал неполную формулу: " + "; ".join(errors[:5]))
@@ -1058,6 +1059,12 @@ def _clean_formula(node: Any) -> Any:
                 cleaned[key] = columns
             continue
         cleaned[key] = _clean_formula(value)
+    # Модель навешивает на арифметические узлы лишние where/from/group_by —
+    # движок у арифметики читает только left/right (_eval_node, diagnose),
+    # так что это мусор (к тому же часто с битыми значениями). Вычищаем.
+    if str(cleaned.get("op") or "").lower() in {"add", "subtract", "multiply", "divide"}:
+        for junk_key in ("where", "filters", "from", "group_by"):
+            cleaned.pop(junk_key, None)
     return _normalize_arithmetic_const(cleaned)
 
 
@@ -1233,6 +1240,82 @@ def _repair_group_fields(node: Any, dictionary: dict[str, Any]) -> Any:
                     result[key] = [repair_one(item, fields) for item in child]
                 else:
                     result[key] = repair_one(child, fields)
+                continue
+            if key == "columns" and isinstance(child, dict):
+                result[key] = {title: walk(formula, current_entity) for title, formula in child.items()}
+                continue
+            if key in {"vars", "variables"} and isinstance(child, dict):
+                result[key] = {name: walk(formula, current_entity) for name, formula in child.items()}
+                continue
+            result[key] = walk(child, current_entity) if isinstance(child, (dict, list)) else child
+        return result
+
+    return walk(node)
+
+
+def _repair_condition_values(node: Any, dictionary: dict[str, Any]) -> Any:
+    """Чинит битые значения фильтров по enums select-полей.
+
+    Модель иногда выдаёт значение со «слипшимся» JSON-хвостом: "1},{" вместо
+    "1" — фильтр не матчит ни одной сделки и формула тихо считает ноль.
+    Для eq/neq/in/not_in по полю со списком values: точное значение не
+    трогаем; значение с допустимым префиксом ("1},{" -> "1") обрезаем;
+    совсем мусор — честная AiFormulaError вместо тихого нуля.
+    """
+    fields_by_entity = _dictionary_fields_by_entity(dictionary)
+
+    def repair_value(raw: Any, allowed: list[str], field_label: str) -> Any:
+        if raw is None:
+            return raw
+        if isinstance(raw, bool):
+            # Модель может прислать true/false для полей со значениями 1/0.
+            text = "1" if raw else "0"
+            if text in allowed:
+                return text
+            raise AiFormulaError(
+                f"Значение «{raw}» не найдено в списке значений поля «{field_label}» — уточни условие."
+            )
+        text = str(raw)
+        if text in allowed:
+            return raw
+        prefixes = [item for item in allowed if item and text.startswith(item)]
+        if prefixes:
+            repaired = max(prefixes, key=len)
+            print(f"AI formula: repaired condition value {text!r} -> {repaired!r} (field {field_label!r})")
+            return repaired
+        raise AiFormulaError(
+            f"Значение «{text}» не найдено в списке значений поля «{field_label}» — уточни условие."
+        )
+
+    def repair_condition(condition: Any, fields: dict[str, dict[str, Any]]) -> Any:
+        if not isinstance(condition, dict):
+            return condition
+        op = str(condition.get("op") or condition.get("operator") or "").lower()
+        if op not in {"eq", "neq", "in", "not_in"}:
+            return condition
+        field_def = fields.get(str(condition.get("field") or ""))
+        allowed = [str(item) for item in (field_def or {}).get("enums") or [] if str(item)]
+        if not allowed:
+            return condition
+        label = str(field_def.get("label") or condition.get("field") or "")
+        repaired = dict(condition)
+        if isinstance(repaired.get("value"), list):
+            repaired["value"] = [repair_value(item, allowed, label) for item in repaired["value"]]
+        else:
+            repaired["value"] = repair_value(repaired.get("value"), allowed, label)
+        return repaired
+
+    def walk(value: Any, entity_type: str = "leads") -> Any:
+        if isinstance(value, list):
+            return [walk(item, entity_type) for item in value]
+        if not isinstance(value, dict):
+            return value
+        current_entity = str(value.get("from") or value.get("entity") or entity_type or "leads")
+        fields = fields_by_entity.get(current_entity) or {}
+        result: dict[str, Any] = {}
+        for key, child in value.items():
+            if key in {"where", "filters"} and isinstance(child, list):
+                result[key] = [repair_condition(condition, fields) for condition in child]
                 continue
             if key == "columns" and isinstance(child, dict):
                 result[key] = {title: walk(formula, current_entity) for title, formula in child.items()}
