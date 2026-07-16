@@ -129,6 +129,26 @@ def test_source_counts_live_not_snapshot(tmp_path):
     assert result["value"] == 3
 
 
+def test_scalar_math_keeps_components(tmp_path):
+    repo = _repo(tmp_path)
+    _insert_raw(repo, "leads", "1", {"id": 1, "status_id": 10})
+    _insert_raw(repo, "leads", "2", {"id": 2, "status_id": 10})
+    _insert_raw(repo, "leads", "3", {"id": 3, "status_id": 20})
+    engine = FormulaEngine(repo)
+
+    result = engine.evaluate({
+        "op": "subtract",
+        "left": {"op": "count", "from": "leads", "where": [{"field": "status_id", "op": "eq", "value": 10, "value_type": "number"}]},
+        "right": {"op": "count", "from": "leads", "where": [{"field": "status_id", "op": "eq", "value": 20, "value_type": "number"}]},
+    })
+
+    assert result["kind"] == "scalar"
+    assert result["value"] == 1
+    assert result["meta"]["op"] == "subtract"
+    assert result["meta"]["left"] == 2
+    assert result["meta"]["right"] == 1
+
+
 def test_formula_engine_filters_month_fields_with_month_presets(tmp_path):
     repo = _repo(tmp_path)
     now = datetime.now(timezone.utc)
