@@ -129,6 +129,8 @@ def render_dashboard(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>amoCRM Dashboard</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&display=swap');
         :root {{
@@ -898,7 +900,11 @@ def render_dashboard(
           width: 100%;
           border-collapse: separate;
           border-spacing: 0;
+          font-family: Montserrat, "Segoe UI", Arial, sans-serif;
           font-size: calc(14px * var(--widget-font-scale, 1));
+          /* Данные — тёмно-серый вместо чёрного --ink; заголовки приглушены
+             своим цветом ниже. Скоуп — только таблицы виджетов. */
+          color: #3d4a5c;
         }}
         .formula-data-table th {{
           position: sticky;
@@ -909,7 +915,7 @@ def render_dashboard(
           border-right: 1px solid #e6eef8;
           background: #f4f8fd;
           color: #8a9bb3;
-          font-size: calc(11px * var(--widget-font-scale, 1));
+          font-size: calc(var(--widget-header-font, 11px) * var(--widget-font-scale, 1));
           font-weight: 900;
           letter-spacing: .11em;
           text-align: right;
@@ -940,7 +946,7 @@ def render_dashboard(
           border-bottom: 0;
         }}
         .formula-row-label {{
-          color: #07101f;
+          color: #3d4a5c;
           font-weight: 800;
         }}
         .formula-summary-row td {{
@@ -971,23 +977,23 @@ def render_dashboard(
           background: #eaf3ff !important;
         }}
         .formula-cell-percent {{
-          font-weight: 900;
+          font-weight: 600;
         }}
         .formula-cell-percent.percent-good {{
-          background: #e9f9ef !important;
-          color: #087443;
+          background: #eef6f0 !important;
+          color: #33795a;
         }}
         .formula-cell-percent.percent-ok {{
-          background: #f1fbf5 !important;
-          color: #0f8f72;
+          background: #f2f8f4 !important;
+          color: #4a8370;
         }}
         .formula-cell-percent.percent-warn {{
-          background: #fff7df !important;
-          color: #8a5a00;
+          background: #f9f3e3 !important;
+          color: #8a6b26;
         }}
         .formula-cell-percent.percent-bad {{
-          background: #ffecec !important;
-          color: #b42318;
+          background: #f9ecea !important;
+          color: #a54a42;
         }}
         .formula-cell-percent.percent-zero {{
           background: #f8fafc !important;
@@ -2066,9 +2072,9 @@ def render_dashboard(
           grid-column: span 2;
         }}
         .widget-control-panel .widget-columns-block {{
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
+          display: grid;
+          gap: 5px;
+          align-content: start;
         }}
         .widget-columns-title {{
           color: #8a9bb3;
@@ -2077,27 +2083,145 @@ def render_dashboard(
           letter-spacing: .1em;
           text-transform: uppercase;
         }}
+        .formula-data-table thead th {{
+          vertical-align: bottom;
+        }}
+        .formula-data-table.has-fixed-columns {{
+          /* Только для таблиц с заданными ширинами: auto-раскладка трактует
+             width на th как пожелание и растягивает колонки по контенту. */
+          table-layout: fixed;
+        }}
+        .formula-data-table.has-fixed-columns th {{
+          min-width: 40px;
+          /* В узких колонках капс и 11px не читаются: обычный регистр,
+             мельче и без разрядки. Обычные таблицы не трогаем. */
+          font-size: calc(var(--widget-header-font, 10px) * var(--widget-font-scale, 1));
+          text-transform: none;
+          letter-spacing: .02em;
+        }}
+        .formula-data-table.has-fixed-columns td {{
+          overflow: hidden;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+        }}
+        .formula-data-table.has-fixed-columns th,
+        .formula-data-table.has-fixed-columns td {{
+          padding-left: calc(7px * var(--widget-font-scale, 1));
+          padding-right: calc(7px * var(--widget-font-scale, 1));
+        }}
+        .formula-data-table th .formula-col-title {{
+          display: block;
+        }}
+        .formula-data-table th.formula-col-fixed .formula-col-title {{
+          /* Заголовок переносится ТОЛЬКО по пробелам и растит шапку в высоту;
+             слово, которое не влезает, обрезается, а не рвётся. Больше 3
+             строк — обрезка, полное имя в title у th. */
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 3;
+          line-clamp: 3;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: normal;
+          word-break: normal;
+          overflow-wrap: normal;
+        }}
+        .widget-columns-list {{
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          max-height: min(240px, 40vh);
+          overflow-y: auto;
+          padding: 4px;
+          border: 1px solid #cfe2ff;
+          border-radius: 11px;
+          background: #fff;
+        }}
         .widget-column-row {{
           display: flex;
           align-items: center;
-          gap: 6px;
-        }}
-        .widget-column-row button {{
-          min-height: 26px;
-          padding: 0 8px;
-          border: 1px solid #cfe2ff;
+          gap: 8px;
+          min-height: 32px;
+          padding: 0 6px;
           border-radius: 8px;
-          background: #f4f9ff;
-          color: #0f3b72;
+        }}
+        .widget-column-row:hover {{
+          background: #eaf4ff;
+        }}
+        .widget-control-panel label.widget-column-toggle {{
+          display: flex;
+          flex: 1;
+          min-width: 0;
+          align-items: center;
+          gap: 8px;
+          margin: 0;
+          color: #12355b;
+          font-size: 13px;
+          font-weight: 700;
+          letter-spacing: 0;
+          text-transform: none;
           cursor: pointer;
         }}
-        .widget-column-row button:disabled {{
-          opacity: .4;
-          cursor: default;
-        }}
-        .widget-column-row .checkbox-control {{
-          flex: 1;
+        .widget-control-panel .widget-column-toggle input {{
+          flex: none;
+          width: 16px;
+          min-height: 16px;
           margin: 0;
+        }}
+        .widget-column-name {{
+          min-width: 0;
+          overflow: hidden;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+        }}
+        .widget-control-panel label.widget-column-toggle {{
+          flex: 1 1 40%;
+          min-width: 90px;
+        }}
+        .widget-control-panel .widget-column-row input.widget-column-title-input {{
+          flex: 1 1 30%;
+          min-width: 80px;
+          width: auto;
+          min-height: 26px;
+          padding: 0 8px;
+          font-size: 12px;
+          border-radius: 8px;
+        }}
+        .widget-control-panel .widget-column-row input.widget-column-width-input {{
+          flex: none;
+          width: 70px;
+          min-height: 26px;
+          padding: 0 6px;
+          font-size: 12px;
+          border-radius: 8px;
+        }}
+        .widget-column-row:has(input:not(:checked)) .widget-column-name {{
+          color: #8a9bb3;
+          font-weight: 600;
+        }}
+        .widget-column-move {{
+          display: flex;
+          flex: none;
+          gap: 4px;
+        }}
+        .widget-column-move button {{
+          width: 26px;
+          min-height: 26px;
+          padding: 0;
+          border: 1px solid #bfdbfe;
+          border-radius: 8px;
+          background: #eaf4ff;
+          color: #0f3b72;
+          font-weight: 900;
+          line-height: 1;
+          cursor: pointer;
+        }}
+        .widget-column-move button:hover:not(:disabled) {{
+          background: #dbeafe;
+        }}
+        .widget-column-move button:disabled {{
+          opacity: .35;
+          cursor: default;
         }}
         .widget-control-panel .panel-actions {{
           display: flex;
@@ -3180,11 +3304,11 @@ def render_dashboard(
         }};
         const tableLabelColumn = '__row_label__';
         const dimensionColumnPrefix = '__dim__:';
-        const tableColumnLabel = (column) => {{
-          if (column === tableLabelColumn) return 'Строка';
+        const tableColumnLabel = (column, columnTitles = {{}}) => {{
+          if (column === tableLabelColumn) return columnTitles[column] || 'Строка';
           if (String(column || '').startsWith(dimensionColumnPrefix)) return String(column).slice(dimensionColumnPrefix.length);
           if (!column) return 'Без сортировки';
-          return column;
+          return columnTitles[column] || column;
         }};
         const seriesDimensionColumns = (rows) => {{
           const columns = [];
@@ -3219,6 +3343,21 @@ def render_dashboard(
           const hiddenColumns = Array.isArray(settings.hidden_columns)
             ? settings.hidden_columns.filter((column) => columns.includes(column))
             : [];
+          // Колонка группировки (tableLabelColumn) настраивается наравне с
+          // данными: имя и ширина — да, видимость/порядок — нет.
+          const titleableColumns = [tableLabelColumn].concat(columns);
+          const rawTitles = settings.column_titles && typeof settings.column_titles === 'object' ? settings.column_titles : {{}};
+          const columnTitles = {{}};
+          titleableColumns.forEach((column) => {{
+            const title = String(rawTitles[column] ?? '').trim();
+            if (title) columnTitles[column] = title;
+          }});
+          const rawWidths = settings.column_widths && typeof settings.column_widths === 'object' ? settings.column_widths : {{}};
+          const columnWidths = {{}};
+          titleableColumns.forEach((column) => {{
+            const width = Number(rawWidths[column]);
+            if (Number.isFinite(width) && width > 0) columnWidths[column] = Math.max(60, Math.min(600, Math.round(width)));
+          }});
           return {{
             sort_by: sortBy,
             sort_dir: settings.sort_dir === 'asc' ? 'asc' : 'desc',
@@ -3227,6 +3366,9 @@ def render_dashboard(
             row_limit: Number.isFinite(limit) ? limit : 0,
             visible_columns: visibleColumns,
             hidden_columns: hiddenColumns,
+            column_titles: columnTitles,
+            column_widths: columnWidths,
+            header_font_size: ['small', 'normal', 'large'].includes(settings.header_font_size) ? settings.header_font_size : 'normal',
           }};
         }};
         const rowColumnValue = (row, column) => {{
@@ -3922,7 +4064,7 @@ def render_dashboard(
           const drilldown = row?._drilldown?.[column];
           const ids = drilldown?.entity_ids;
           const canOpen = widgetId && Array.isArray(ids) && ids.length > 0;
-          if (!canOpen) return `<td class="${{safeText(className)}}">${{safeText(formattedValue)}}</td>`;
+          if (!canOpen) return `<td class="${{safeText(className)}}" title="${{safeText(formattedValue)}}">${{safeText(formattedValue)}}</td>`;
           const title = drilldown.truncated
             ? `Открыть первые ${{ids.length}} сделок из ${{drilldown.total || ids.length}}`
             : `Открыть ${{drilldown.total || ids.length}} сделок`;
@@ -3935,7 +4077,7 @@ def render_dashboard(
         const renderSeriesDrilldownCell = (widgetId, row, formattedValue, className = '') => {{
           const ids = row?.entity_ids;
           const canOpen = widgetId && Array.isArray(ids) && ids.length > 0;
-          if (!canOpen) return `<td class="${{safeText(className)}}">${{safeText(formattedValue)}}</td>`;
+          if (!canOpen) return `<td class="${{safeText(className)}}" title="${{safeText(formattedValue)}}">${{safeText(formattedValue)}}</td>`;
           const title = row.trace_truncated
             ? `Открыть первые ${{ids.length}} сделок из ${{row.trace_total || ids.length}}`
             : `Открыть ${{row.trace_total || ids.length}} сделок`;
@@ -4037,18 +4179,43 @@ def render_dashboard(
           }}
           const columns = formulaTableColumns(result, rows);
           const prepared = applyFormulaTableSettings(result, rows, columns, tableSettings);
+          const columnTitles = prepared.settings?.column_titles || {{}};
+          const columnWidths = prepared.settings?.column_widths || {{}};
+          const headerCell = (column, fallbackLabel = '') => {{
+            const original = fallbackLabel || column;
+            const width = Number(columnWidths[column] || 0);
+            const widthStyle = width ? ` class="formula-col-fixed" style="width: ${{width}}px; max-width: ${{width}}px;"` : '';
+            return `<th title="${{safeText(original)}}"${{widthStyle}}><span class="formula-col-title">${{safeText(columnTitles[column] || original)}}</span></th>`;
+          }};
+          // table-layout: fixed включается только при заданных ширинах — иначе
+          // auto-раскладка игнорирует width на th и раздаёт остаток по контенту.
+          const hasFixedColumns = Object.keys(columnWidths).length > 0;
+          // Ширина таблицы = сумма колонок (незаданным даём дефолт), иначе
+          // width:100% растянул бы колонки на контейнер. width:auto не годится:
+          // с ним браузер отключает fixed-алгоритм раскладки.
+          const fixedTotal = [tableLabelColumn].concat(prepared.columns).reduce(
+            (total, column) => total + (Number(columnWidths[column]) || (column === tableLabelColumn ? 160 : 120)), 0);
+          // Размер заголовков: small/large меняют CSS-переменную, «Обычный»
+          // не ставит её — работают дефолты (11px, в fixed-режиме 10px).
+          const headerFontMap = {{ small: '9px', large: '12px' }};
+          const headerFont = headerFontMap[prepared.settings?.header_font_size] || '';
+          const tableStyles = [];
+          if (hasFixedColumns) tableStyles.push(`width: ${{fixedTotal}}px`);
+          if (headerFont) tableStyles.push(`--widget-header-font: ${{headerFont}}`);
+          const tableAttrs = ` class="formula-data-table${{hasFixedColumns ? ' has-fixed-columns' : ''}}"`
+            + (tableStyles.length ? ` style="${{tableStyles.join('; ')}}"` : '');
           return `
             <div class="report-table-wrap formula-table-wrap">
-              <table class="formula-data-table">
+              <table${{tableAttrs}}>
                 <thead>
                   <tr>
-                    <th>Строка</th>
-                    ${{prepared.columns.map((column) => `<th>${{safeText(column)}}</th>`).join('')}}
+                    ${{headerCell(tableLabelColumn, 'Строка')}}
+                    ${{prepared.columns.map((column) => headerCell(column)).join('')}}
                   </tr>
                 </thead>
                 <tbody>${{prepared.rows.map((row) => `
                   <tr class="${{formulaRowClass(row)}}">
-                    <td class="formula-row-label">${{safeText(row.label ?? row.key ?? 'Итого')}}</td>
+                    <td class="formula-row-label" title="${{safeText(row.label ?? row.key ?? 'Итого')}}">${{safeText(row.label ?? row.key ?? 'Итого')}}</td>
                     ${{prepared.columns.map((column) => renderDrilldownCell(widgetId, row, column, formatFormulaTableValue(column, row[column] ?? 0), formulaCellClass(column, row[column] ?? 0))).join('')}}
                   </tr>
                 `).join('')}}</tbody>
@@ -5066,16 +5233,42 @@ def render_dashboard(
           const columnsBlock = columns.length > 1 ? `
               <div class="widget-columns-block wide-field" data-widget-columns-block>
                 <span class="widget-columns-title">Колонки: порядок и видимость</span>
-                ${{orderedPanelColumns.map((column, index) => `
-                  <div class="widget-column-row" data-widget-column="${{safeText(column)}}">
-                    <button type="button" data-widget-column-move="up" title="Выше" ${{index === 0 ? 'disabled' : ''}}>&#8593;</button>
-                    <button type="button" data-widget-column-move="down" title="Ниже" ${{index === orderedPanelColumns.length - 1 ? 'disabled' : ''}}>&#8595;</button>
-                    <label class="checkbox-control">
-                      <input type="checkbox" data-widget-column-toggle ${{hiddenPanelColumns.has(column) ? '' : 'checked'}}>
-                      <span>${{safeText(column)}}</span>
+                <div class="widget-columns-list">
+                  <div class="widget-column-row" data-widget-column="${{safeText(tableLabelColumn)}}" data-widget-column-fixed>
+                    <label class="widget-column-toggle" title="Колонка группировки — всегда видима и всегда первая">
+                      <input type="checkbox" checked disabled>
+                      <span class="widget-column-name">${{safeText(settings.column_titles[tableLabelColumn] || 'Строка')}}</span>
                     </label>
+                    <input type="text" class="widget-column-title-input" data-widget-column-title
+                      value="${{safeText(settings.column_titles[tableLabelColumn] || '')}}"
+                      placeholder="Строка" title="Своё название (пусто — «Строка»)">
+                    <input type="number" class="widget-column-width-input" data-widget-column-width
+                      value="${{safeText(settings.column_widths[tableLabelColumn] || '')}}"
+                      placeholder="авто" min="60" max="600" step="10" title="Ширина колонки, px">
+                    <div class="widget-column-move">
+                      <button type="button" title="Колонка группировки всегда первая" disabled>&#8593;</button>
+                      <button type="button" title="Колонка группировки всегда первая" disabled>&#8595;</button>
+                    </div>
                   </div>
-                `).join('')}}
+                  ${{orderedPanelColumns.map((column, index) => `
+                    <div class="widget-column-row" data-widget-column="${{safeText(column)}}">
+                      <label class="widget-column-toggle" title="${{safeText(column)}}">
+                        <input type="checkbox" data-widget-column-toggle ${{hiddenPanelColumns.has(column) ? '' : 'checked'}}>
+                        <span class="widget-column-name">${{safeText(settings.column_titles[column] || column)}}</span>
+                      </label>
+                      <input type="text" class="widget-column-title-input" data-widget-column-title
+                        value="${{safeText(settings.column_titles[column] || '')}}"
+                        placeholder="${{safeText(column)}}" title="Своё название (пусто — оригинальное)">
+                      <input type="number" class="widget-column-width-input" data-widget-column-width
+                        value="${{safeText(settings.column_widths[column] || '')}}"
+                        placeholder="авто" min="60" max="600" step="10" title="Ширина колонки, px">
+                      <div class="widget-column-move">
+                        <button type="button" data-widget-column-move="up" title="Выше" ${{index === 0 ? 'disabled' : ''}}>&#8593;</button>
+                        <button type="button" data-widget-column-move="down" title="Ниже" ${{index === orderedPanelColumns.length - 1 ? 'disabled' : ''}}>&#8595;</button>
+                      </div>
+                    </div>
+                  `).join('')}}
+                </div>
               </div>` : '';
           return `
             <div class="widget-control-panel" data-widget-settings-panel>
@@ -5092,7 +5285,7 @@ def render_dashboard(
               <label>
                 Сортировать по
                 <select data-widget-setting="sort_by">
-                  ${{sortOptions.map((column) => optionHtml(column, tableColumnLabel(column), settings.sort_by)).join('')}}
+                  ${{sortOptions.map((column) => optionHtml(column, tableColumnLabel(column, settings.column_titles), settings.sort_by)).join('')}}
                 </select>
               </label>
               <label>
@@ -5105,7 +5298,7 @@ def render_dashboard(
               <label>
                 Скрывать нули по
                 <select data-widget-setting="zero_column">
-                  ${{zeroOptions.map((column) => optionHtml(column, column || 'Любой числовой колонке', settings.zero_column)).join('')}}
+                  ${{zeroOptions.map((column) => optionHtml(column, column ? (settings.column_titles[column] || column) : 'Любой числовой колонке', settings.zero_column)).join('')}}
                 </select>
               </label>
               <label>
@@ -5122,6 +5315,14 @@ def render_dashboard(
                 Размер текста
                 <select data-widget-setting="font_scale">
                   ${{widgetFontScaleOptions.map(([value, label]) => optionHtml(value, label, fontScale)).join('')}}
+                </select>
+              </label>
+              <label>
+                Размер заголовков
+                <select data-widget-setting="header_font_size">
+                  ${{optionHtml('small', 'Мелкий', settings.header_font_size)}}
+                  ${{optionHtml('normal', 'Обычный', settings.header_font_size)}}
+                  ${{optionHtml('large', 'Крупный', settings.header_font_size)}}
                 </select>
               </label>
               <label class="checkbox-control">
@@ -5328,13 +5529,46 @@ def render_dashboard(
         const collectWidgetColumnSettings = (panel) => {{
           const visible = [];
           const hidden = [];
+          const columnTitles = {{}};
+          const columnWidths = {{}};
           panel.querySelectorAll('[data-widget-column]').forEach((row) => {{
             const name = row.dataset.widgetColumn;
             if (!name) return;
-            const checked = row.querySelector('[data-widget-column-toggle]')?.checked;
-            (checked ? visible : hidden).push(name);
+            if (!row.hasAttribute('data-widget-column-fixed')) {{
+              // Колонка группировки в visible/hidden не участвует — только
+              // имя и ширина.
+              const checked = row.querySelector('[data-widget-column-toggle]')?.checked;
+              (checked ? visible : hidden).push(name);
+            }}
+            const title = String(row.querySelector('[data-widget-column-title]')?.value || '').trim();
+            if (title) columnTitles[name] = title;
+            const width = Number(row.querySelector('[data-widget-column-width]')?.value || 0);
+            if (Number.isFinite(width) && width > 0) columnWidths[name] = Math.max(60, Math.min(600, Math.round(width)));
           }});
-          return {{ visible, hidden }};
+          // Объекты пишутся ЦЕЛИКОМ: merge table_settings поверхностный, частичная
+          // запись затёрла бы переименования соседних колонок.
+          return {{ visible_columns: visible, hidden_columns: hidden, column_titles: columnTitles, column_widths: columnWidths }};
+        }};
+        let widgetColumnFieldTimer = null;
+        const persistWidgetColumnSettings = async (panel, widgetId, focusRef = null) => {{
+          const patch = {{ table_settings: collectWidgetColumnSettings(panel) }};
+          try {{
+            await updateWidgetViewSettings(widgetId, patch);
+          }} catch (error) {{
+            savedDashboardEl.innerHTML = `<div class="report-empty">Ошибка настроек виджета: ${{safeText(error.message)}}</div>`;
+            return;
+          }}
+          if (!focusRef?.column) return;
+          // Ре-рендер пересоздал панель — возвращаем фокус в поле, где печатали.
+          const card = [...(savedDashboardEl?.querySelectorAll('.saved-widget') || [])]
+            .find((item) => String(item.dataset.widgetId) === String(focusRef.widgetId));
+          const input = card?.querySelector(`[data-widget-column="${{CSS.escape(focusRef.column)}}"] [${{focusRef.attr}}]`);
+          if (input) {{
+            input.focus();
+            try {{
+              if (focusRef.caret !== null && focusRef.caret !== undefined) input.setSelectionRange(focusRef.caret, focusRef.caret);
+            }} catch (error) {{ /* type=number не поддерживает каретку */ }}
+          }}
         }};
         savedDashboardEl?.addEventListener('click', async (event) => {{
           const moveButton = event.target.closest('[data-widget-column-move]');
@@ -5347,16 +5581,11 @@ def render_dashboard(
             const sibling = moveButton.dataset.widgetColumnMove === 'up'
               ? row.previousElementSibling
               : row.nextElementSibling;
-            if (!sibling || !sibling.hasAttribute('data-widget-column')) return;
+            if (!sibling || !sibling.hasAttribute('data-widget-column') || sibling.hasAttribute('data-widget-column-fixed')) return;
             // Переставляем строку в DOM и сохраняем порядок целиком —
             // updateWidgetViewSettings перерисует виджет и панель.
             if (moveButton.dataset.widgetColumnMove === 'up') sibling.before(row); else sibling.after(row);
-            const {{ visible, hidden }} = collectWidgetColumnSettings(panel);
-            try {{
-              await updateWidgetViewSettings(moveWidgetId, {{ table_settings: {{ visible_columns: visible, hidden_columns: hidden }} }});
-            }} catch (error) {{
-              savedDashboardEl.innerHTML = `<div class="report-empty">Ошибка настроек виджета: ${{safeText(error.message)}}</div>`;
-            }}
+            await persistWidgetColumnSettings(panel, moveWidgetId);
             return;
           }}
           const button = event.target.closest('[data-widget-action]');
@@ -5411,6 +5640,28 @@ def render_dashboard(
             item.classList.remove('menu-open', 'settings-open', 'details-open');
           }});
         }});
+        savedDashboardEl?.addEventListener('input', (event) => {{
+          const field = event.target.closest('[data-widget-column-title], [data-widget-column-width]');
+          if (!field) return;
+          if (!dashboardEditMode()) return;
+          const panel = field.closest('[data-widget-settings-panel]');
+          const widgetId = field.closest('.saved-widget')?.dataset.widgetId;
+          if (!panel || !widgetId) return;
+          let caret = null;
+          try {{
+            caret = field.selectionStart;
+          }} catch (error) {{ /* type=number */ }}
+          const focusRef = {{
+            widgetId,
+            column: field.closest('[data-widget-column]')?.dataset.widgetColumn,
+            attr: field.hasAttribute('data-widget-column-title') ? 'data-widget-column-title' : 'data-widget-column-width',
+            caret,
+          }};
+          window.clearTimeout(widgetColumnFieldTimer);
+          widgetColumnFieldTimer = window.setTimeout(() => {{
+            persistWidgetColumnSettings(panel, widgetId, focusRef);
+          }}, 300);
+        }});
         savedDashboardEl?.addEventListener('change', async (event) => {{
           const columnToggle = event.target.closest('[data-widget-column-toggle]');
           if (columnToggle) {{
@@ -5418,17 +5669,12 @@ def render_dashboard(
             const panel = columnToggle.closest('[data-widget-settings-panel]');
             const toggleWidgetId = columnToggle.closest('.saved-widget')?.dataset.widgetId;
             if (!panel || !toggleWidgetId) return;
-            const {{ visible, hidden }} = collectWidgetColumnSettings(panel);
-            if (!visible.length) {{
+            if (!collectWidgetColumnSettings(panel).visible_columns.length) {{
               // Последнюю видимую колонку скрыть нельзя — откатываем чекбокс.
               columnToggle.checked = true;
               return;
             }}
-            try {{
-              await updateWidgetViewSettings(toggleWidgetId, {{ table_settings: {{ visible_columns: visible, hidden_columns: hidden }} }});
-            }} catch (error) {{
-              savedDashboardEl.innerHTML = `<div class="report-empty">Ошибка настроек виджета: ${{safeText(error.message)}}</div>`;
-            }}
+            await persistWidgetColumnSettings(panel, toggleWidgetId);
             return;
           }}
           const control = event.target.closest('[data-widget-setting]');
