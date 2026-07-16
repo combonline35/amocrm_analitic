@@ -2199,6 +2199,56 @@ def render_dashboard(
           color: #8a9bb3;
           font-weight: 600;
         }}
+        .column-builder-toolbar {{
+          display: flex;
+          align-items: flex-end;
+          gap: 12px;
+          flex-wrap: wrap;
+        }}
+        .column-builder-toolbar .builder-field {{
+          margin: 0;
+        }}
+        .column-builder-list {{
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }}
+        .column-builder-row {{
+          display: grid;
+          gap: 8px;
+          padding: 12px;
+          border: 1px solid var(--line-soft);
+          border-radius: 14px;
+          background: #fff;
+        }}
+        .column-builder-row-head {{
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+        }}
+        .column-builder-row-head input[data-column-title] {{
+          flex: 1 1 200px;
+          min-width: 140px;
+        }}
+        .ai-formula-box .column-builder-row textarea {{
+          min-height: 52px;
+        }}
+        .column-builder-row-status {{
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--muted);
+        }}
+        .column-builder-row-status.ok {{
+          color: #15803d;
+        }}
+        .column-builder-row-status.error {{
+          color: #b91c1c;
+        }}
+        .column-builder-preview {{
+          font-size: 12px;
+          color: var(--quiet);
+        }}
         .widget-column-move {{
           display: flex;
           flex: none;
@@ -4697,6 +4747,211 @@ def render_dashboard(
             if (amoFilterApplyBtn) amoFilterApplyBtn.disabled = false;
           }}
         }};
+        // ═══ Конструктор колонок: блоки «название + описание», каждый —
+        // отдельный AI-запрос на одну колонку; таблица склеивается из готовых.
+        const columnBuilderEl = document.querySelector('[data-column-builder]');
+        const columnBuilderListEl = document.querySelector('[data-column-builder-list]');
+        const columnBuilderGroupEl = document.querySelector('[data-column-builder-group]');
+        const columnBuilderStatusEl = document.querySelector('[data-column-builder-status]');
+        let columnBuilderSeq = 0;
+        const columnBuilderBlocks = [];
+        const columnBuilderAggregateOps = new Set(['count', 'sum', 'avg', 'min', 'max']);
+        const setColumnBuilderStatus = (text, isError = false) => {{
+          if (!columnBuilderStatusEl) return;
+          columnBuilderStatusEl.textContent = text;
+          columnBuilderStatusEl.classList.toggle('error', Boolean(isError));
+        }};
+        const refreshColumnBuilderGroupOptions = () => {{
+          if (!columnBuilderGroupEl) return;
+          const groupable = allFormulaFields().filter((field) => field.groupable);
+          fillFormulaSelect(
+            columnBuilderGroupEl,
+            groupable.map((field) => ({{ value: field.value, label: `${{field.label || field.value}} · ${{field.value}}` }})),
+            '(из первой колонки)',
+          );
+        }};
+        const pinGroupByDeep = (node, groupField) => {{
+          if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+          if (columnBuilderAggregateOps.has(String(node.op || '').toLowerCase())) node.group_by = groupField;
+          ['left', 'right', 'return', 'body'].forEach((key) => pinGroupByDeep(node[key], groupField));
+          if (node.vars && typeof node.vars === 'object') {{
+            Object.values(node.vars).forEach((child) => pinGroupByDeep(child, groupField));
+          }}
+        }};
+        const findGroupByDeep = (node) => {{
+          if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
+          if (node.group_by) return node.group_by;
+          for (const key of ['left', 'right', 'return', 'body']) {{
+            const found = findGroupByDeep(node[key]);
+            if (found) return found;
+          }}
+          if (node.vars && typeof node.vars === 'object') {{
+            for (const child of Object.values(node.vars)) {{
+              const found = findGroupByDeep(child);
+              if (found) return found;
+            }}
+          }}
+          return null;
+        }};
+        // Поле для пина группировки: выбранное в селекте, иначе — из первой
+        // успешно собранной колонки (null = первый блок задаёт группировку сам).
+        const columnBuilderPinField = () => {{
+          if (columnBuilderGroupEl?.value) return columnBuilderGroupEl.value;
+          const first = columnBuilderBlocks.find((block) => block.status === 'ok' && block.formula);
+          return first ? findGroupByDeep(first.formula) : null;
+        }};
+        const columnBlockPreviewText = (result) => {{
+          if (!result) return '';
+          if (result.kind === 'series') return `Превью: ${{(result.rows || []).length}} строк`;
+          if (result.kind === 'scalar') return `Превью: итог ${{formatNumber(result.value ?? 0)}} (без группировки)`;
+          return `Превью: ${{result.kind}}`;
+        }};
+        const columnBlockStatusHtml = (block) => {{
+          if (block.status === 'busy') return '<span class="column-builder-row-status">Собираю...</span>';
+          if (block.status === 'ok') return '<span class="column-builder-row-status ok">готово ✓</span>';
+          if (block.status === 'error') return `<span class="column-builder-row-status error">ошибка ✗ ${{safeText(block.error || '')}}</span>`;
+          return '';
+        }};
+        const renderColumnBuilder = () => {{
+          if (!columnBuilderListEl) return;
+          if (!columnBuilderBlocks.length) {{
+            columnBuilderListEl.innerHTML = '<div class="report-empty">Колонок пока нет — добавь первую.</div>';
+            return;
+          }}
+          columnBuilderListEl.innerHTML = columnBuilderBlocks.map((block, index) => `
+            <div class="column-builder-row" data-column-block="${{safeText(block.id)}}">
+              <div class="column-builder-row-head">
+                <input type="text" data-column-title placeholder="Название (пусто — возьмём из AI)" value="${{safeText(block.title)}}">
+                <button type="button" class="secondary" data-column-block-run ${{block.status === 'busy' ? 'disabled' : ''}}>Собрать</button>
+                <div class="widget-column-move">
+                  <button type="button" data-column-block-move="up" title="Выше" ${{index === 0 ? 'disabled' : ''}}>&#8593;</button>
+                  <button type="button" data-column-block-move="down" title="Ниже" ${{index === columnBuilderBlocks.length - 1 ? 'disabled' : ''}}>&#8595;</button>
+                </div>
+                <button type="button" class="secondary" data-column-block-remove title="Удалить колонку">&#10005;</button>
+                ${{columnBlockStatusHtml(block)}}
+              </div>
+              <textarea rows="2" data-column-prompt placeholder="Что считаем: например, количество сделок за текущий месяц">${{safeText(block.prompt)}}</textarea>
+              ${{block.preview ? `<div class="column-builder-preview">${{safeText(block.preview)}}</div>` : ''}}
+            </div>
+          `).join('');
+        }};
+        const columnBlockById = (blockId) => columnBuilderBlocks.find((block) => String(block.id) === String(blockId));
+        const generateColumnBlock = async (blockId) => {{
+          const block = columnBlockById(blockId);
+          if (!block) return;
+          const text = String(block.prompt || '').trim();
+          if (!text) {{
+            block.status = 'error';
+            block.error = 'Опиши, что считаем';
+            renderColumnBuilder();
+            return;
+          }}
+          const pinBefore = columnBuilderPinField();
+          const groupHint = pinBefore ? ` с группировкой по полю ${{fieldLabel(pinBefore)}} (${{pinBefore}})` : ' с группировкой';
+          const prompt = `${{text}}. Верни ОДНУ агрегатную формулу (count/sum/avg/divide)${{groupHint}}, без таблицы (op не table).`;
+          block.status = 'busy';
+          block.error = '';
+          renderColumnBuilder();
+          try {{
+            const response = await fetch(apiUrl('/api/ai/formula/draft'), {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: JSON.stringify({{ prompt, source_id: selectedFormulaSourceId() }}),
+            }});
+            const data = await response.json();
+            if (!response.ok || !data.ok) throw new Error(data.error || 'draft failed');
+            const draft = data.draft || {{}};
+            if (draft.configured === false) throw new Error(draft.message || 'AI-ключ не настроен');
+            let formula = draft.formula;
+            let draftTitle = String(draft.title || '').trim();
+            if (formula && String(formula.op || '').toLowerCase() === 'table') {{
+              // Модель всё же вернула таблицу — берём её первую колонку.
+              const entries = Object.entries(formula.columns || {{}});
+              if (!entries.length) throw new Error('AI вернул таблицу без колонок');
+              draftTitle = entries[0][0] || draftTitle;
+              formula = entries[0][1];
+            }}
+            if (!formula || typeof formula !== 'object') throw new Error('AI не вернул формулу');
+            const pinField = columnBuilderPinField();
+            if (pinField) pinGroupByDeep(formula, pinField);
+            block.formula = formula;
+            if (!String(block.title || '').trim() && draftTitle) block.title = draftTitle;
+            block.status = 'ok';
+            block.preview = columnBlockPreviewText(data.result);
+          }} catch (error) {{
+            block.status = 'error';
+            block.error = error.message;
+            block.formula = null;
+            block.preview = '';
+          }}
+          renderColumnBuilder();
+        }};
+        const assembleColumnBuilderTable = async () => {{
+          if (!formulaEditorEl) return;
+          const ready = columnBuilderBlocks.filter((block) => block.status === 'ok' && block.formula);
+          const skipped = columnBuilderBlocks.filter((block) => !(block.status === 'ok' && block.formula));
+          if (!ready.length) {{
+            setColumnBuilderStatus('Нет собранных колонок: нажми «Собрать» у каждого блока.', true);
+            return;
+          }}
+          const columns = {{}};
+          ready.forEach((block, index) => {{
+            let title = String(block.title || '').trim() || `Колонка ${{index + 1}}`;
+            while (columns[title]) title += ' ·';
+            columns[title] = block.formula;
+          }});
+          formulaEditorEl.value = JSON.stringify({{ op: 'table', columns }}, null, 2);
+          aiFormulaPinned = true;
+          const skippedNote = skipped.length
+            ? `, пропущено: ${{skipped.map((block) => String(block.title || '').trim() || 'без названия').join(', ')}}`
+            : '';
+          setColumnBuilderStatus(`Собрано ${{ready.length}} из ${{columnBuilderBlocks.length}}${{skippedNote}}. Считаю превью...`, false);
+          await runFormula();
+          setColumnBuilderStatus(`Собрано ${{ready.length}} из ${{columnBuilderBlocks.length}}${{skippedNote}}. Превью ниже — можно отправить на дашборд.`, false);
+        }};
+        columnBuilderEl?.addEventListener('click', async (event) => {{
+          if (event.target.closest('[data-column-builder-add]')) {{
+            columnBuilderSeq += 1;
+            columnBuilderBlocks.push({{ id: `col-${{columnBuilderSeq}}`, title: '', prompt: '', formula: null, status: 'empty', error: '', preview: '' }});
+            renderColumnBuilder();
+            return;
+          }}
+          if (event.target.closest('[data-column-builder-assemble]')) {{
+            await assembleColumnBuilderTable();
+            return;
+          }}
+          const row = event.target.closest('[data-column-block]');
+          if (!row) return;
+          const blockId = row.dataset.columnBlock;
+          if (event.target.closest('[data-column-block-remove]')) {{
+            const index = columnBuilderBlocks.findIndex((block) => String(block.id) === String(blockId));
+            if (index >= 0) columnBuilderBlocks.splice(index, 1);
+            renderColumnBuilder();
+            return;
+          }}
+          const moveButton = event.target.closest('[data-column-block-move]');
+          if (moveButton) {{
+            const index = columnBuilderBlocks.findIndex((block) => String(block.id) === String(blockId));
+            const target = moveButton.dataset.columnBlockMove === 'up' ? index - 1 : index + 1;
+            if (index < 0 || target < 0 || target >= columnBuilderBlocks.length) return;
+            [columnBuilderBlocks[index], columnBuilderBlocks[target]] = [columnBuilderBlocks[target], columnBuilderBlocks[index]];
+            renderColumnBuilder();
+            return;
+          }}
+          if (event.target.closest('[data-column-block-run]')) {{
+            await generateColumnBlock(blockId);
+          }}
+        }});
+        columnBuilderEl?.addEventListener('input', (event) => {{
+          const row = event.target.closest('[data-column-block]');
+          if (!row) return;
+          const block = columnBlockById(row.dataset.columnBlock);
+          if (!block) return;
+          // Правка текста не перерисовывает список — фокус остаётся в поле.
+          if (event.target.matches('[data-column-title]')) block.title = event.target.value;
+          if (event.target.matches('[data-column-prompt]')) block.prompt = event.target.value;
+        }});
+        renderColumnBuilder();
         const loadFormulaDictionary = async () => {{
           if (!formulaDictionaryEl) return;
           try {{
@@ -4706,6 +4961,7 @@ def render_dashboard(
             formulaDictionaryCache = data.dictionary;
             renderFormulaDictionary(data.dictionary);
             refreshFormulaHumanBuilder();
+            refreshColumnBuilderGroupOptions();
             syncFormulaEditorFromMask();
           }} catch (error) {{
             formulaDictionaryEl.innerHTML = `<div class="report-empty">Не удалось загрузить словарь: ${{safeText(error.message)}}</div>`;
@@ -6736,6 +6992,26 @@ def _render_constructor_shell(
               <span class="sync-status" data-amo-filter-status>Можно вставить ссылку с фильтрами amoCRM.</span>
             </div>
             <div class="ai-formula-result" data-amo-filter-result></div>
+          </div>
+
+          <div class="ai-formula-box" data-column-builder>
+            <div>
+              <div class="eyebrow">Конструктор колонок</div>
+              <h3 style="margin: 4px 0 6px;">Собери таблицу из колонок</h3>
+              <p style="margin: 0; color: var(--muted);">Каждая колонка — отдельное описание словами. AI собирает их по одной, потом склеиваем в таблицу.</p>
+            </div>
+            <div class="column-builder-toolbar">
+              <label class="builder-field">
+                Группировать по
+                <select data-column-builder-group><option value="">(из первой колонки)</option></select>
+              </label>
+              <button type="button" class="secondary" data-column-builder-assemble>Собрать таблицу</button>
+              <span class="sync-status" data-column-builder-status>Добавь колонки и собери таблицу.</span>
+            </div>
+            <div class="column-builder-list" data-column-builder-list></div>
+            <div class="ai-formula-actions">
+              <button type="button" class="secondary" data-column-builder-add>Добавить колонку</button>
+            </div>
           </div>
 
           <div class="formula-human-builder" data-formula-builder>
