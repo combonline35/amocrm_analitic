@@ -1243,6 +1243,20 @@ def render_dashboard(
         .formula-panel > .plan-settings {{
           margin: 14px;
         }}
+        .formula-panel.manual-mode summary {{
+          min-height: 46px;
+          padding: 10px 16px;
+        }}
+        .formula-panel.manual-mode summary strong {{
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--muted);
+        }}
+        .manual-mode-body {{
+          display: grid;
+          gap: 14px;
+          padding: 14px;
+        }}
         .formula-lab-layout {{
           display: grid;
           grid-template-columns: minmax(0, 1fr) minmax(380px, .48fr);
@@ -7148,6 +7162,12 @@ def _render_constructor_shell(
             </div>
           </div>
 
+          <details class="formula-panel manual-mode">
+            <summary>
+              <strong>Ручной режим (маска и JSON)</strong>
+              <span>для точной ручной настройки — обычно хватает AI-помощника и конструктора колонок</span>
+            </summary>
+            <div class="manual-mode-body">
           <div class="formula-human-builder" data-formula-builder>
             <div class="formula-mask-grid">
               <div class="builder-field">
@@ -7262,8 +7282,10 @@ def _render_constructor_shell(
               <textarea id="formula-editor" class="formula-editor" data-formula-editor spellcheck="false"></textarea>
             </div>
           </details>
+            </div>
+          </details>
 
-          <details class="formula-panel" open>
+          <details class="formula-panel">
             <summary>
               <strong>Словарь полей</strong>
               <span>пополняется автоматически из amoCRM и выгруженных кастомных полей</span>
