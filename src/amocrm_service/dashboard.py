@@ -129,6 +129,8 @@ def render_dashboard(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>amoCRM Dashboard</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&display=swap');
         :root {{
@@ -898,7 +900,11 @@ def render_dashboard(
           width: 100%;
           border-collapse: separate;
           border-spacing: 0;
+          font-family: Montserrat, "Segoe UI", Arial, sans-serif;
           font-size: calc(14px * var(--widget-font-scale, 1));
+          /* Данные — тёмно-серый вместо чёрного --ink; заголовки приглушены
+             своим цветом ниже. Скоуп — только таблицы виджетов. */
+          color: #3d4a5c;
         }}
         .formula-data-table th {{
           position: sticky;
@@ -909,7 +915,7 @@ def render_dashboard(
           border-right: 1px solid #e6eef8;
           background: #f4f8fd;
           color: #8a9bb3;
-          font-size: calc(11px * var(--widget-font-scale, 1));
+          font-size: calc(var(--widget-header-font, 11px) * var(--widget-font-scale, 1));
           font-weight: 900;
           letter-spacing: .11em;
           text-align: right;
@@ -940,7 +946,7 @@ def render_dashboard(
           border-bottom: 0;
         }}
         .formula-row-label {{
-          color: #07101f;
+          color: #3d4a5c;
           font-weight: 800;
         }}
         .formula-summary-row td {{
@@ -971,23 +977,23 @@ def render_dashboard(
           background: #eaf3ff !important;
         }}
         .formula-cell-percent {{
-          font-weight: 900;
+          font-weight: 600;
         }}
         .formula-cell-percent.percent-good {{
-          background: #e9f9ef !important;
-          color: #087443;
+          background: #eef6f0 !important;
+          color: #33795a;
         }}
         .formula-cell-percent.percent-ok {{
-          background: #f1fbf5 !important;
-          color: #0f8f72;
+          background: #f2f8f4 !important;
+          color: #4a8370;
         }}
         .formula-cell-percent.percent-warn {{
-          background: #fff7df !important;
-          color: #8a5a00;
+          background: #f9f3e3 !important;
+          color: #8a6b26;
         }}
         .formula-cell-percent.percent-bad {{
-          background: #ffecec !important;
-          color: #b42318;
+          background: #f9ecea !important;
+          color: #a54a42;
         }}
         .formula-cell-percent.percent-zero {{
           background: #f8fafc !important;
@@ -3362,6 +3368,7 @@ def render_dashboard(
             hidden_columns: hiddenColumns,
             column_titles: columnTitles,
             column_widths: columnWidths,
+            header_font_size: ['small', 'normal', 'large'].includes(settings.header_font_size) ? settings.header_font_size : 'normal',
           }};
         }};
         const rowColumnValue = (row, column) => {{
@@ -4188,8 +4195,13 @@ def render_dashboard(
           // с ним браузер отключает fixed-алгоритм раскладки.
           const fixedTotal = [tableLabelColumn].concat(prepared.columns).reduce(
             (total, column) => total + (Number(columnWidths[column]) || (column === tableLabelColumn ? 160 : 120)), 0);
+          // Размер заголовков: small/large меняют CSS-переменную, «Обычный»
+          // не ставит её — работают дефолты (11px, в fixed-режиме 10px).
+          const headerFontMap = {{ small: '9px', large: '12px' }};
+          const headerFont = headerFontMap[prepared.settings?.header_font_size] || '';
           const tableStyles = [];
           if (hasFixedColumns) tableStyles.push(`width: ${{fixedTotal}}px`);
+          if (headerFont) tableStyles.push(`--widget-header-font: ${{headerFont}}`);
           const tableAttrs = ` class="formula-data-table${{hasFixedColumns ? ' has-fixed-columns' : ''}}"`
             + (tableStyles.length ? ` style="${{tableStyles.join('; ')}}"` : '');
           return `
@@ -5303,6 +5315,14 @@ def render_dashboard(
                 Размер текста
                 <select data-widget-setting="font_scale">
                   ${{widgetFontScaleOptions.map(([value, label]) => optionHtml(value, label, fontScale)).join('')}}
+                </select>
+              </label>
+              <label>
+                Размер заголовков
+                <select data-widget-setting="header_font_size">
+                  ${{optionHtml('small', 'Мелкий', settings.header_font_size)}}
+                  ${{optionHtml('normal', 'Обычный', settings.header_font_size)}}
+                  ${{optionHtml('large', 'Крупный', settings.header_font_size)}}
                 </select>
               </label>
               <label class="checkbox-control">
