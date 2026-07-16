@@ -149,6 +149,34 @@ def test_scalar_math_keeps_components(tmp_path):
     assert result["meta"]["right"] == 1
 
 
+def test_table_marks_divide_columns_as_ratio(tmp_path):
+    repo = _repo(tmp_path)
+    _insert_raw(repo, "leads", "1", {"id": 1, "status_id": 10, "responsible_user_id": 5})
+    _insert_raw(repo, "leads", "2", {"id": 2, "status_id": 20, "responsible_user_id": 5})
+    engine = FormulaEngine(repo)
+
+    count_all = {"op": "count", "from": "leads", "group_by": "responsible_user_id"}
+    count_target = {
+        "op": "count",
+        "from": "leads",
+        "group_by": "responsible_user_id",
+        "where": [{"field": "status_id", "op": "eq", "value": 10, "value_type": "number"}],
+    }
+    result = engine.evaluate({
+        "op": "table",
+        "columns": {
+            "Заявки": count_all,
+            # название кричит «конверсия», но формула — count: НЕ доля
+            "Конверсия дел": dict(count_target),
+            "Cv в целевые": {"op": "divide", "left": dict(count_target), "right": dict(count_all)},
+        },
+    })
+
+    # признак — по смыслу формулы (divide), а не по названию колонки
+    assert result["meta"]["ratio_columns"] == ["Cv в целевые"]
+    assert result["rows"][0]["Cv в целевые"] == 0.5
+
+
 def test_formula_engine_filters_month_fields_with_month_presets(tmp_path):
     repo = _repo(tmp_path)
     now = datetime.now(timezone.utc)
