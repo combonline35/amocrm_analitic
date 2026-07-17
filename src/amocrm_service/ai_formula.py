@@ -123,6 +123,8 @@ DRAFT_ROW_LABEL_COLUMN = "__row_label__"
 
 TEMPORAL_OPS = {"this_month", "previous_month", "this_week", "previous_week", "last_days", "date_between"}
 TEMPORAL_FIELD_TYPES = {"date", "datetime", "month"}
+NUMERIC_FIELD_TYPES = {"number", "numeric", "price", "monetary"}
+TEXTUAL_FIELD_TYPES = {"text", "textarea"}
 
 # Основы названий месяцев (подстроки, ловят падежные формы: "июле", "июля", "августе").
 RU_MONTH_MARKERS = (
@@ -160,6 +162,7 @@ Critical business rule: for measurement-conversion tables by "Замерщик" 
 - Имя менеджера сопоставляй по частичному совпадению с name из users (фамилии или имени достаточно, падеж может отличаться). Если имя не найдено в users — не выдумывай id, добавь уточняющий вопрос в questions.
 - Формула должна быть объектом нашего DSL.
 - Базовые операции: count, sum, avg, min, max.
+- Для sum/avg используй только ЧИСЛОВЫЕ поля (type number/numeric). Поля типа text/textarea суммировать нельзя, даже если название подходит. Если пользователь просит сумму бюджета — это базовое поле price («Бюджет»), а не текстовые cf-поля с похожим названием.
 - Арифметика: add, subtract, multiply, divide с left/right.
 - У add/subtract/multiply/divide левая и правая часть всегда должны быть объектами формулы. Для процента "Договора / Состоялось" продублируй две count-формулы с одинаковым group_by, а не ссылайся на названия колонок.
 - Константа в арифметике — ОТДЕЛЬНЫЙ узел: {"op":"const","value":100} в right. НЕ клади value:100 в сам multiply/divide-узел — right при этом останется пустым и формула будет забракована.
@@ -918,6 +921,7 @@ def build_formula_draft(
         draft["formula"] = _repair_temporal_conditions(draft["formula"], dictionary, user_prompt=user_prompt)
         draft["formula"] = _repair_group_fields(draft["formula"], dictionary)
         draft["formula"] = _repair_condition_values(draft["formula"], dictionary)
+        _validate_sum_fields(draft["formula"], dictionary)
         errors = _formula_validation_errors(draft["formula"])
         if errors:
             raise AiFormulaError("AI собрал неполную формулу: " + "; ".join(errors[:5]))
@@ -1309,9 +1313,51 @@ def _repair_filter_fields(node: Any, dictionary: dict[str, Any]) -> Any:
                 result[key] = {name: walk(formula, current_entity) for name, formula in child.items()}
                 continue
             result[key] = walk(child, current_entity) if isinstance(child, (dict, list)) else child
+        # Выдуманное поле-значение агрегата (sum/avg/min/max по «cf_бюджет») —
+        # тот же ремонт по label; двойники решает prefer="numeric": суммировать
+        # можно только числовое поле, textarea-тёзка («БЮДЖЕТ») не подходит.
+        if fields and str(result.get("op") or "").lower() in {"sum", "avg", "min", "max"}:
+            value_field = str(result.get("field") or "")
+            if value_field and value_field not in fields:
+                replacement = _match_group_field(value_field, fields, prefer="numeric")
+                if not replacement:
+                    raise AiFormulaError(f"Поле «{value_field}» не найдено в аккаунте — уточни название поля.")
+                result["field"] = replacement
         return result
 
     return walk(node)
+
+
+def _validate_sum_fields(node: Any, dictionary: dict[str, Any]) -> None:
+    """Sum/avg по текстовому полю — тихий мусор вместо суммы.
+
+    У аккаунта рядом с базовым price («Бюджет», number) живёт textarea-тёзка
+    «БЮДЖЕТ» — если модель схватила её, честно останавливаемся до расчёта,
+    а не отдаём ноль.
+    """
+    fields_by_entity = _dictionary_fields_by_entity(dictionary)
+
+    def walk(value: Any, entity_type: str = "leads") -> None:
+        if isinstance(value, list):
+            for item in value:
+                walk(item, entity_type)
+            return
+        if not isinstance(value, dict):
+            return
+        current_entity = str(value.get("from") or value.get("entity") or entity_type or "leads")
+        if str(value.get("op") or "").lower() in {"sum", "avg"}:
+            fields = fields_by_entity.get(current_entity) or {}
+            field_def = fields.get(str(value.get("field") or ""))
+            if field_def and str(field_def.get("type") or "").lower() in TEXTUAL_FIELD_TYPES:
+                label = field_def.get("label") or value.get("field")
+                raise AiFormulaError(
+                    f"Поле «{label}» текстовое, суммировать нельзя — уточни, какое поле имеется в виду."
+                )
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                walk(child, current_entity)
+
+    walk(node)
 
 
 def _repair_condition_values(node: Any, dictionary: dict[str, Any]) -> Any:
@@ -1430,6 +1476,8 @@ def _match_group_field(raw: str, fields: dict[str, dict[str, Any]], *, prefer: s
         if prefer == "temporal" and field_type in TEMPORAL_FIELD_TYPES:
             score += 25
         elif prefer == "discrete" and (field.get("enums") or field_type in {"select", "multiselect", "boolean"}):
+            score += 25
+        elif prefer == "numeric" and field_type in NUMERIC_FIELD_TYPES:
             score += 25
         if field.get("groupable"):
             score += 5
