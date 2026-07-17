@@ -12,6 +12,7 @@ from amocrm_service.ai_formula import (
     _repair_filter_fields,
     _repair_group_fields,
     _simple_count_draft,
+    _validate_sum_fields,
 )
 
 
@@ -530,3 +531,51 @@ def test_repair_filter_field_temporal_unknown_left_for_rescue():
     }
     repaired = _repair_filter_fields(formula, TWIN_FIELDS_DICTIONARY)
     assert repaired["where"][0]["field"] == "cf_фаза_луны"
+
+
+# Двойники «бюджета» из реального аккаунта: базовый price (number) и
+# textarea-тёзка «БЮДЖЕТ» — sum по ней дал бы тихий мусор.
+BUDGET_DICTIONARY = {
+    "entities": [
+        {
+            "value": "leads",
+            "label": "Сделки",
+            "count": 10,
+            "fields": [
+                {"value": "price", "label": "Бюджет", "type": "number", "groupable": True},
+                {"value": "cf_677651", "label": "БЮДЖЕТ", "type": "textarea", "groupable": True},
+            ],
+        }
+    ],
+    "operators": {},
+}
+
+
+def test_sum_over_textarea_field_errors():
+    formula = {"op": "sum", "from": "leads", "field": "cf_677651"}
+    with pytest.raises(AiFormulaError) as excinfo:
+        _validate_sum_fields(formula, BUDGET_DICTIONARY)
+    assert "текстовое, суммировать нельзя" in str(excinfo.value)
+    assert "БЮДЖЕТ" in str(excinfo.value)
+
+
+def test_sum_over_textarea_inside_table_errors():
+    formula = {
+        "op": "table",
+        "columns": {"Сумма": {"op": "sum", "from": "leads", "field": "cf_677651", "group_by": "price"}},
+    }
+    with pytest.raises(AiFormulaError):
+        _validate_sum_fields(formula, BUDGET_DICTIONARY)
+
+
+def test_sum_over_numeric_field_passes():
+    formula = {"op": "sum", "from": "leads", "field": "price"}
+    _validate_sum_fields(formula, BUDGET_DICTIONARY)  # не должно упасть
+
+
+def test_sum_field_repair_prefers_numeric():
+    # Выдуманное поле «cf_бюджет»: оба label совпадают, но sum должен
+    # выбрать числовой price, а не textarea-тёзку.
+    formula = {"op": "sum", "from": "leads", "field": "cf_бюджет"}
+    repaired = _repair_filter_fields(formula, BUDGET_DICTIONARY)
+    assert repaired["field"] == "price"
