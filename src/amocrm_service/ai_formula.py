@@ -912,6 +912,7 @@ def build_formula_draft(
             draft["formula"] = _apply_default_source(draft["formula"], int(default_source.get("id") or 0))
         elif not default_source and not _prompt_mentions_any_source(user_prompt, sources):
             draft["formula"] = _clear_formula_sources(draft["formula"])
+        draft["formula"] = _repair_filter_fields(draft["formula"], dictionary)
         draft["formula"] = _repair_temporal_conditions(draft["formula"], dictionary, user_prompt=user_prompt)
         draft["formula"] = _inherit_table_base_conditions(draft["formula"])
         draft["formula"] = _repair_temporal_conditions(draft["formula"], dictionary, user_prompt=user_prompt)
@@ -1253,6 +1254,66 @@ def _repair_group_fields(node: Any, dictionary: dict[str, Any]) -> Any:
     return walk(node)
 
 
+def _repair_filter_fields(node: Any, dictionary: dict[str, Any]) -> Any:
+    """Чинит выдуманные моделью поля в условиях where/filters по словарю.
+
+    Модель выдумывает cf_id (например cf_638473) или пишет имя поля словами —
+    без ремонта движок падает на «Unknown filter field». Поле сопоставляется
+    по label тем же матчером, что и group_by (_match_group_field), с выбором
+    по СМЫСЛУ op при двойниках «флаг + дата»: временная операция -> date-поле,
+    eq/in со значением -> select/флаг. Не нашли: для временных op условие
+    остаётся как есть — его спасает _repair_temporal_conditions (этот ремонт
+    стоит в пайплайне раньше); для остальных — честная AiFormulaError.
+    """
+    fields_by_entity = _dictionary_fields_by_entity(dictionary)
+
+    def repair_condition(condition: Any, fields: dict[str, dict[str, Any]]) -> Any:
+        if not isinstance(condition, dict):
+            return condition
+        field = str(condition.get("field") or "")
+        if not field or field in fields:
+            return condition
+        op = str(condition.get("op") or condition.get("operator") or "").lower()
+        prefer = None
+        if op in TEMPORAL_OPS:
+            prefer = "temporal"
+        elif op in {"eq", "neq", "in", "not_in"} and condition.get("value") not in (None, ""):
+            prefer = "discrete"
+        replacement = _match_group_field(field, fields, prefer=prefer)
+        if replacement:
+            repaired = dict(condition)
+            repaired["field"] = replacement
+            return repaired
+        if op in TEMPORAL_OPS:
+            return condition
+        raise AiFormulaError(f"Поле «{field}» не найдено в аккаунте — уточни название поля.")
+
+    def walk(value: Any, entity_type: str = "leads") -> Any:
+        if isinstance(value, list):
+            return [walk(item, entity_type) for item in value]
+        if not isinstance(value, dict):
+            return value
+        current_entity = str(value.get("from") or value.get("entity") or entity_type or "leads")
+        fields = fields_by_entity.get(current_entity) or {}
+        result: dict[str, Any] = {}
+        for key, child in value.items():
+            if key in {"where", "filters"} and isinstance(child, list):
+                # Пустой словарь полей = сущность нам неизвестна; условия
+                # не трогаем и ошибок не выдумываем.
+                result[key] = [repair_condition(condition, fields) for condition in child] if fields else child
+                continue
+            if key == "columns" and isinstance(child, dict):
+                result[key] = {title: walk(formula, current_entity) for title, formula in child.items()}
+                continue
+            if key in {"vars", "variables"} and isinstance(child, dict):
+                result[key] = {name: walk(formula, current_entity) for name, formula in child.items()}
+                continue
+            result[key] = walk(child, current_entity) if isinstance(child, (dict, list)) else child
+        return result
+
+    return walk(node)
+
+
 def _repair_condition_values(node: Any, dictionary: dict[str, Any]) -> Any:
     """Чинит битые значения фильтров по enums select-полей.
 
@@ -1329,7 +1390,14 @@ def _repair_condition_values(node: Any, dictionary: dict[str, Any]) -> Any:
     return walk(node)
 
 
-def _match_group_field(raw: str, fields: dict[str, dict[str, Any]]) -> str | None:
+def _match_group_field(raw: str, fields: dict[str, dict[str, Any]], *, prefer: str | None = None) -> str | None:
+    """Сопоставляет выдуманное моделью имя поля с реальным по label.
+
+    prefer разруливает двойники «флаг + дата» с похожими именами
+    («Т_замер состоялся» select vs «ДПвС-ЗАМЕР ЗАМЕР СОСТОЯЛСЯ» date):
+    "temporal" — бонус date/datetime/month-полям (временные операции),
+    "discrete" — бонус select/флагам с enums (eq/in со значением).
+    """
     target = raw[3:] if raw.startswith("cf_") and not raw[3:].isdigit() else raw
     target_norm = _normalize_prompt_text(target)
     target_tokens = _text_tokens(target)
@@ -1358,6 +1426,11 @@ def _match_group_field(raw: str, fields: dict[str, dict[str, Any]]) -> str | Non
                 score += 12
         if not score:
             continue
+        field_type = str(field.get("type") or "").lower()
+        if prefer == "temporal" and field_type in TEMPORAL_FIELD_TYPES:
+            score += 25
+        elif prefer == "discrete" and (field.get("enums") or field_type in {"select", "multiselect", "boolean"}):
+            score += 25
         if field.get("groupable"):
             score += 5
         if score > best_score:

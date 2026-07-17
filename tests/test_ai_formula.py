@@ -9,6 +9,7 @@ from amocrm_service.ai_formula import (
     _inherit_table_base_conditions,
     _normalize_draft_table_settings,
     _repair_condition_values,
+    _repair_filter_fields,
     _repair_group_fields,
     _simple_count_draft,
 )
@@ -454,3 +455,78 @@ def test_clean_strips_where_from_arithmetic_node():
     # left/right и их собственные условия не тронуты
     assert cleaned["left"]["where"][0]["value"] == "1"
     assert cleaned["right"] == {"op": "count", "from": "leads"}
+
+
+# Двойники «флаг + дата» из реального аккаунта: похожие label, разные типы.
+TWIN_FIELDS_DICTIONARY = {
+    "entities": [
+        {
+            "value": "leads",
+            "label": "Сделки",
+            "count": 10,
+            "fields": [
+                {"value": "cf_638511", "label": "Т_замер состоялся", "type": "select", "groupable": True, "enums": ["1", "0"]},
+                {"value": "cf_666171", "label": "ДПвС-ЗАМЕР ЗАМЕР СОСТОЯЛСЯ", "type": "date", "groupable": True},
+                {"value": "created_at", "label": "Дата создания", "type": "date", "groupable": False},
+            ],
+        }
+    ],
+    "operators": {},
+}
+
+
+def test_repair_filter_field_by_label():
+    formula = {
+        "op": "count",
+        "from": "leads",
+        "where": [{"field": "cf_замер_состоялся", "op": "eq", "value": "1"}],
+    }
+    repaired = _repair_filter_fields(formula, TWIN_FIELDS_DICTIONARY)
+    # eq со значением -> флаг (select), а не date-двойник
+    assert repaired["where"][0]["field"] == "cf_638511"
+
+
+def test_repair_filter_field_prefers_date_for_temporal_op():
+    formula = {
+        "op": "count",
+        "from": "leads",
+        "where": [{"field": "cf_замер_состоялся", "op": "this_month", "value": None}],
+    }
+    repaired = _repair_filter_fields(formula, TWIN_FIELDS_DICTIONARY)
+    # временная операция -> date-поле, а не флаг
+    assert repaired["where"][0]["field"] == "cf_666171"
+
+
+def test_repair_filter_field_inside_divide():
+    formula = {
+        "op": "divide",
+        "left": {"op": "count", "from": "leads", "where": [{"field": "cf_замер_состоялся", "op": "eq", "value": "1"}]},
+        "right": {"op": "count", "from": "leads", "where": [{"field": "created_at", "op": "this_month", "value": None}]},
+    }
+    repaired = _repair_filter_fields(formula, TWIN_FIELDS_DICTIONARY)
+    assert repaired["left"]["where"][0]["field"] == "cf_638511"
+    assert repaired["right"]["where"][0]["field"] == "created_at"
+
+
+def test_repair_filter_field_unknown_errors():
+    formula = {
+        "op": "count",
+        "from": "leads",
+        "where": [{"field": "cf_638473", "op": "eq", "value": "1"}],
+    }
+    with pytest.raises(AiFormulaError) as excinfo:
+        _repair_filter_fields(formula, TWIN_FIELDS_DICTIONARY)
+    assert "не найдено" in str(excinfo.value)
+    assert "cf_638473" in str(excinfo.value)
+
+
+def test_repair_filter_field_temporal_unknown_left_for_rescue():
+    # Временное условие по несматченному полю не роняем — его дальше
+    # спасает _repair_temporal_conditions.
+    formula = {
+        "op": "count",
+        "from": "leads",
+        "where": [{"field": "cf_фаза_луны", "op": "this_month", "value": None}],
+    }
+    repaired = _repair_filter_fields(formula, TWIN_FIELDS_DICTIONARY)
+    assert repaired["where"][0]["field"] == "cf_фаза_луны"
