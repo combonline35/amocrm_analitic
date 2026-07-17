@@ -5480,8 +5480,8 @@ def render_dashboard(
             if (!lastFormulaResult) await runFormula();
             if (columnBuilderWidgetId) {{
               // Режим правки: перезаписываем существующий виджет целиком
-              // списком (контракт POST {widgets}); layout/table_settings/вид
-              // пользователя не трогаем.
+              // списком (контракт POST c ключом widgets); layout/table_settings
+              // и вид пользователя не трогаем.
               const listResponse = await fetch(apiUrl('/api/dashboard-widgets'));
               const listData = await listResponse.json();
               if (!listResponse.ok || !listData.ok) throw new Error(listData.error || 'widgets load failed');
