@@ -2105,6 +2105,18 @@ def render_dashboard(
           gap: 5px;
           align-content: start;
         }}
+        .widget-control-panel .widget-edit-columns-link {{
+          justify-self: start;
+          font-size: 12px;
+          font-weight: 700;
+          color: #2563eb;
+          text-decoration: none;
+          border-bottom: 1px dotted rgba(37, 99, 235, .45);
+        }}
+        .widget-control-panel .widget-edit-columns-link:hover {{
+          color: #1d4ed8;
+          border-bottom-color: #1d4ed8;
+        }}
         .widget-columns-title {{
           color: #8a9bb3;
           font-size: 10px;
@@ -4832,6 +4844,48 @@ def render_dashboard(
         let columnBuilderSeq = 0;
         const columnBuilderBlocks = [];
         const columnBuilderAggregateOps = new Set(['count', 'sum', 'avg', 'min', 'max']);
+        let columnBuilderWidgetId = '';        // непустой = «Обновить виджет»
+        let columnBuilderAssembledJson = '';   // JSON редактора на момент сборки
+        let columnBuilderPendingGroup = '';    // группировка, ждущая загрузки словаря
+        let columnBuilderDraftTimer = null;
+        const columnBuilderStorageKey = (() => {{
+          const params = new URLSearchParams(window.location.search);
+          return `amo-column-builder-draft:${{params.get('user') || ''}}:${{params.get('account') || ''}}`;
+        }})();
+        // Блоки для widget.settings: формулы не дублируем (они в formula_spec,
+        // ключ соединения — title), prompt нужен для последующей правки.
+        const columnBuilderSettingsPayload = () => {{
+          if (!columnBuilderAssembledJson || !formulaEditorEl || formulaEditorEl.value !== columnBuilderAssembledJson) return {{}};
+          const blocks = columnBuilderBlocks
+            .filter((block) => String(block.prompt || '').trim() || String(block.title || '').trim())
+            .map((block) => ({{ title: String(block.title || ''), prompt: String(block.prompt || ''), status: block.status }}));
+          if (!blocks.length) return {{}};
+          return {{ column_blocks: blocks, column_builder_group: columnBuilderGroupEl?.value || '' }};
+        }};
+        const saveColumnBuilderDraft = () => {{
+          if (!columnBuilderEl || columnBuilderWidgetId) return;
+          window.clearTimeout(columnBuilderDraftTimer);
+          columnBuilderDraftTimer = window.setTimeout(() => {{
+            try {{
+              const blocks = columnBuilderBlocks
+                .filter((block) => String(block.prompt || '').trim() || String(block.title || '').trim())
+                .map((block) => ({{ title: String(block.title || ''), prompt: String(block.prompt || '') }}));
+              if (!blocks.length) {{
+                window.localStorage.removeItem(columnBuilderStorageKey);
+                return;
+              }}
+              window.localStorage.setItem(columnBuilderStorageKey, JSON.stringify({{
+                blocks,
+                group: columnBuilderGroupEl?.value || '',
+              }}));
+            }} catch (error) {{ /* localStorage может быть недоступен — черновик просто не пишется */ }}
+          }}, 400);
+        }};
+        const clearColumnBuilderDraft = () => {{
+          try {{
+            window.localStorage.removeItem(columnBuilderStorageKey);
+          }} catch (error) {{ /* ignore */ }}
+        }};
         const setColumnBuilderStatus = (text, isError = false) => {{
           if (!columnBuilderStatusEl) return;
           columnBuilderStatusEl.textContent = text;
@@ -4845,6 +4899,12 @@ def render_dashboard(
             groupable.map((field) => ({{ value: field.value, label: `${{field.label || field.value}} · ${{field.value}}` }})),
             '(из первой колонки)',
           );
+          // Группировка из восстановленного виджета/черновика ждёт, пока
+          // словарь наполнит селект опциями.
+          if (columnBuilderPendingGroup && [...columnBuilderGroupEl.options].some((option) => option.value === columnBuilderPendingGroup)) {{
+            columnBuilderGroupEl.value = columnBuilderPendingGroup;
+            columnBuilderPendingGroup = '';
+          }}
         }};
         const pinGroupByDeep = (node, groupField) => {{
           if (!node || typeof node !== 'object' || Array.isArray(node)) return;
@@ -4995,6 +5055,7 @@ def render_dashboard(
             </div>
           `).join('');
           renderColumnBuilderLiveTable();
+          saveColumnBuilderDraft();
         }};
         const columnBlockById = (blockId) => columnBuilderBlocks.find((block) => String(block.id) === String(blockId));
         const generateColumnBlock = async (blockId) => {{
@@ -5065,6 +5126,7 @@ def render_dashboard(
           }});
           formulaEditorEl.value = JSON.stringify({{ op: 'table', columns }}, null, 2);
           aiFormulaPinned = true;
+          columnBuilderAssembledJson = formulaEditorEl.value;
           const skippedNote = skipped.length
             ? `, пропущено: ${{skipped.map((block) => String(block.title || '').trim() || 'без названия').join(', ')}}`
             : '';
@@ -5113,13 +5175,93 @@ def render_dashboard(
           // Правка текста не перерисовывает список — фокус остаётся в поле.
           if (event.target.matches('[data-column-title]')) block.title = event.target.value;
           if (event.target.matches('[data-column-prompt]')) block.prompt = event.target.value;
+          saveColumnBuilderDraft();
         }});
         // Заголовок в живой таблице обновляем по blur (change), не на каждый
         // символ — чтобы не дёргать перерисовку под руками.
         columnBuilderEl?.addEventListener('change', (event) => {{
           if (event.target.matches('[data-column-title]')) renderColumnBuilderLiveTable();
         }});
-        renderColumnBuilder();
+        const restoreColumnBuilderDraft = () => {{
+          let draft = null;
+          try {{
+            draft = JSON.parse(window.localStorage.getItem(columnBuilderStorageKey) || 'null');
+          }} catch (error) {{
+            return;
+          }}
+          if (!draft || !Array.isArray(draft.blocks) || !draft.blocks.length) return;
+          draft.blocks.forEach((item) => {{
+            columnBuilderSeq += 1;
+            columnBuilderBlocks.push({{
+              id: `col-${{columnBuilderSeq}}`,
+              title: String(item.title || ''),
+              prompt: String(item.prompt || ''),
+              formula: null,
+              status: 'empty',
+              error: '',
+              preview: '',
+              result: null,
+            }});
+          }});
+          if (draft.group) columnBuilderPendingGroup = String(draft.group);
+          setColumnBuilderStatus('Черновик восстановлен: собери колонки заново.');
+        }};
+        const restoreColumnBuilderFromWidget = async (widgetId) => {{
+          try {{
+            const response = await fetch(apiUrl('/api/dashboard-widgets'));
+            const data = await response.json();
+            if (!response.ok || !data.ok) throw new Error(data.error || 'widgets load failed');
+            const widget = (data.widgets || []).find((item) => String(item.id) === String(widgetId));
+            if (!widget) throw new Error('виджет не найден');
+            const savedBlocks = Array.isArray(widget.settings?.column_blocks) ? widget.settings.column_blocks : [];
+            if (!savedBlocks.length) throw new Error('у виджета нет сохранённых блоков колонок');
+            // Формулы блоков не дублируются в settings — восстанавливаем их
+            // из formula_spec.columns по title (ключ соединения).
+            const columns = widget.formula_spec?.columns && typeof widget.formula_spec.columns === 'object'
+              ? widget.formula_spec.columns
+              : {{}};
+            columnBuilderBlocks.length = 0;
+            savedBlocks.forEach((item) => {{
+              columnBuilderSeq += 1;
+              const title = String(item.title || '');
+              const formula = columns[title] && typeof columns[title] === 'object' ? columns[title] : null;
+              columnBuilderBlocks.push({{
+                id: `col-${{columnBuilderSeq}}`,
+                title,
+                prompt: String(item.prompt || ''),
+                formula,
+                status: formula ? 'ok' : 'empty',
+                error: '',
+                preview: '',
+                result: null,
+              }});
+            }});
+            if (widget.settings?.column_builder_group) columnBuilderPendingGroup = String(widget.settings.column_builder_group);
+            columnBuilderWidgetId = String(widget.id || '');
+            if (formulaSaveBtn) formulaSaveBtn.textContent = 'Обновить виджет';
+            if (widget.title) setFormulaTitle(widget.title, {{ force: true }});
+            if (formulaEditorEl && widget.formula_spec && typeof widget.formula_spec === 'object') {{
+              formulaEditorEl.value = JSON.stringify(widget.formula_spec, null, 2);
+              aiFormulaPinned = true;
+              columnBuilderAssembledJson = formulaEditorEl.value;
+            }}
+            setColumnBuilderStatus(`Правка виджета «${{widget.title || widgetId}}»: измени блоки, собери таблицу и обнови виджет.`);
+          }} catch (error) {{
+            setColumnBuilderStatus(`Не удалось открыть виджет для правки: ${{error.message}}`, true);
+          }}
+          renderColumnBuilder();
+        }};
+        const initColumnBuilder = () => {{
+          if (!columnBuilderEl) return;
+          const editWidgetId = new URLSearchParams(window.location.search).get('edit_widget') || '';
+          if (editWidgetId) {{
+            restoreColumnBuilderFromWidget(editWidgetId);
+            return;
+          }}
+          restoreColumnBuilderDraft();
+          renderColumnBuilder();
+        }};
+        initColumnBuilder();
         const loadFormulaDictionary = async () => {{
           if (!formulaDictionaryEl) return;
           try {{
@@ -5336,30 +5478,63 @@ def render_dashboard(
             const title = currentFormulaTitle() || suggestedFormulaTitle();
             setFormulaTitle(title, {{ force: true }});
             if (!lastFormulaResult) await runFormula();
-            const response = await fetch(apiUrl('/api/dashboard-widgets'), {{
-              method: 'POST',
-              headers: {{ 'Content-Type': 'application/json' }},
-              body: JSON.stringify({{
-                title,
-                widget_type: 'formula',
-                view: lastAiFormulaDraft?.view || 'table',
-                size: formulaSizeEl?.value || 'medium',
-                page_id: selectedWidgetPageId(),
-                formula: 'none',
-                formula_spec: formula,
-                query: {{}},
-                settings: {{}},
-                table_settings: lastAiFormulaDraft?.table_settings || {{}},
-              }}),
-            }});
-            const data = await response.json();
-            if (!response.ok || !data.ok) throw new Error(data.error || 'save failed');
+            if (columnBuilderWidgetId) {{
+              // Режим правки: перезаписываем существующий виджет целиком
+              // списком (контракт POST {widgets}); layout/table_settings/вид
+              // пользователя не трогаем.
+              const listResponse = await fetch(apiUrl('/api/dashboard-widgets'));
+              const listData = await listResponse.json();
+              if (!listResponse.ok || !listData.ok) throw new Error(listData.error || 'widgets load failed');
+              const widgets = Array.isArray(listData.widgets) ? listData.widgets : [];
+              if (!widgets.some((item) => String(item.id) === String(columnBuilderWidgetId))) {{
+                throw new Error('Виджет не найден — возможно, его удалили');
+              }}
+              const nextWidgets = widgets.map((item) => {{
+                if (String(item.id) !== String(columnBuilderWidgetId)) return item;
+                return {{
+                  ...item,
+                  title,
+                  formula_spec: formula,
+                  settings: {{ ...(item.settings || {{}}), ...columnBuilderSettingsPayload() }},
+                }};
+              }});
+              const response = await fetch(apiUrl('/api/dashboard-widgets'), {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ widgets: nextWidgets }}),
+              }});
+              const data = await response.json();
+              if (!response.ok || !data.ok) throw new Error(data.error || 'update failed');
+            }} else {{
+              const response = await fetch(apiUrl('/api/dashboard-widgets'), {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{
+                  title,
+                  widget_type: 'formula',
+                  view: lastAiFormulaDraft?.view || 'table',
+                  size: formulaSizeEl?.value || 'medium',
+                  page_id: selectedWidgetPageId(),
+                  formula: 'none',
+                  formula_spec: formula,
+                  query: {{}},
+                  settings: columnBuilderSettingsPayload(),
+                  table_settings: lastAiFormulaDraft?.table_settings || {{}},
+                }}),
+              }});
+              const data = await response.json();
+              if (!response.ok || !data.ok) throw new Error(data.error || 'save failed');
+            }}
+            clearColumnBuilderDraft();
             if (formulaStatusEl) {{
-              formulaStatusEl.textContent = 'Показатель сохранен. Считаю результат для дашборда...';
+              formulaStatusEl.textContent = columnBuilderWidgetId
+                ? 'Виджет обновлен. Считаю результат для дашборда...'
+                : 'Показатель сохранен. Считаю результат для дашборда...';
             }}
             await refreshDashboardWidgetResults();
             if (formulaStatusEl) {{
-              formulaStatusEl.innerHTML = `Показатель добавлен и рассчитан. <a href="${{apiUrl('/dashboard')}}">Открыть дашборд</a>`;
+              const doneText = columnBuilderWidgetId ? 'Виджет обновлен и пересчитан.' : 'Показатель добавлен и рассчитан.';
+              formulaStatusEl.innerHTML = `${{doneText}} <a href="${{apiUrl('/dashboard')}}">Открыть дашборд</a>`;
             }}
             await loadSavedDashboard(false, false, true);
           }} catch (error) {{
@@ -5763,6 +5938,9 @@ def render_dashboard(
                 <span>Скрыть нулевые строки</span>
               </label>
               ${{columnsBlock}}
+              ${{Array.isArray(widget.settings?.column_blocks) && widget.settings.column_blocks.length
+                ? `<a class="widget-edit-columns-link" href="${{apiUrl('/constructor', {{ edit_widget: widget.id || '' }})}}">Править колонки в конструкторе</a>`
+                : ''}}
               <div class="panel-actions">
                 <button type="button" data-widget-action="close-settings" data-widget-id="${{safeText(widget.id || '')}}">Готово</button>
               </div>
