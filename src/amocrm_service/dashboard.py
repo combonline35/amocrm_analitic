@@ -1259,9 +1259,24 @@ def render_dashboard(
         }}
         .formula-lab-layout {{
           display: grid;
-          grid-template-columns: minmax(0, 1fr) minmax(380px, .48fr);
+          /* Правая панель фиксированной ширины, левая ужимается (minmax(0,..)),
+             иначе широкий контент распирал колонку под sticky-панель. */
+          grid-template-columns: minmax(0, 1fr) 380px;
           gap: 18px;
           align-items: start;
+        }}
+        /* У grid-детей min-width по умолчанию auto — широкий контент (селекты,
+           таблицы) распирает колонку и уезжает под панель результата.
+           min-width: 0 заставляет сжиматься, а скролл дают их обёртки. */
+        .formula-editor-panel > *,
+        .ai-formula-box > * {{
+          min-width: 0;
+        }}
+        .column-builder-live {{
+          overflow-x: auto;
+        }}
+        .column-builder-toolbar select {{
+          max-width: 320px;
         }}
         .formula-editor-panel,
         .formula-preview-panel {{
@@ -2606,6 +2621,12 @@ def render_dashboard(
             grid-template-columns: 1fr;
           }}
           .constructor-preview-panel {{
+            position: static;
+          }}
+          .formula-lab-layout {{
+            grid-template-columns: 1fr;
+          }}
+          .formula-preview-panel {{
             position: static;
           }}
           .formula-inline-grid {{
