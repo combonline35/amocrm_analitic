@@ -5405,7 +5405,17 @@ def render_dashboard(
             lastFormulaDiagnostics = data.diagnostics || null;
             aiFormulaResultEl.innerHTML = renderAiFormulaDraft(data.draft, data.result, lastFormulaDiagnostics);
             aiFormulaApplyBtn.disabled = false;
-            aiFormulaStatusEl.textContent = 'Черновик готов. Проверь результат и нажми “Применить черновик”.';
+            // Авто-применение: сразу переносим формулу в редактор и пиним (pin),
+            // чтобы правая панель «Посчитать» показывала то же число, что AI, а
+            // не пустую маску. Кнопка «Применить черновик» остаётся для повторного
+            // применения после ручной правки JSON. Если модель вернула только
+            // вопросы (formula отсутствует) — applyAiFormulaDraft сам ничего не делает.
+            if (lastAiFormulaDraft?.formula) {{
+              applyAiFormulaDraft();
+              aiFormulaStatusEl.textContent = 'Черновик готов и применён — предпросмотр справа совпадает с расчётом AI. Можно отправить на дашборд.';
+            }} else {{
+              aiFormulaStatusEl.textContent = 'Черновик готов. Проверь результат и нажми “Применить черновик”.';
+            }}
           }} catch (error) {{
             const message = error.name === 'AbortError'
               ? 'AI не ответил за 300 секунд. Попробуй еще раз или разбей таблицу на несколько показателей.'
